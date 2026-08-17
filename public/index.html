@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PolyMock · 控制台</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◈</span>
+      <span class="brand-name">PolyMock</span>
+      <span class="brand-sub">本地接口模拟</span>
+    </div>
+    <div class="topbar-meta">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">连接中</span>
+      <span class="meta-sep">·</span>
+      <span>HTTP 协议</span>
+      <span class="meta-sep">·</span>
+      <span id="route-count">0 个接口</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel routes-panel">
+      <div class="panel-head">
+        <h2>已注册接口</h2>
+        <span class="count-badge" id="count-badge">0</span>
+      </div>
+
+      <div id="routes" class="routes" aria-live="polite"></div>
+
+      <div id="empty" class="empty" hidden>
+        <div class="empty-glyph">∅</div>
+        <p class="empty-title">还没有任何接口</p>
+        <p class="empty-desc">在右侧表单中新增一个 HTTP 接口<br>注册后即可直接通过 path 访问</p>
+      </div>
+    </section>
+
+    <aside class="panel form-panel">
+      <div class="panel-head">
+        <h2>新增接口</h2>
+      </div>
+
+      <form id="route-form" autocomplete="off">
+        <div class="field">
+          <label for="f-method">请求方法</label>
+          <div class="method-row">
+            <select id="f-method" name="method">
+              <option value="GET" selected>GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+            <input id="f-path" name="path" type="text" placeholder="/api/user/info" spellcheck="false" autofocus>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="f-status">响应状态码</label>
+          <input id="f-status" name="status" type="number" value="200" min="100" max="599">
+        </div>
+
+        <div class="field">
+          <div class="label-row">
+            <label for="f-body">响应 Body（JSON）</label>
+            <span class="hint">留空则返回空对象</span>
+          </div>
+          <textarea id="f-body" name="body" rows="8" placeholder='{&#10;  "code": 0,&#10;  "data": {&#10;    "id": 1001,&#10;    "name": "PolyMock"&#10;  }&#10;}' spellcheck="false"></textarea>
+          <p class="field-error" id="body-error" hidden>body 不是合法的 JSON</p>
+        </div>
+
+        <button type="submit" class="submit-btn">
+          <span class="submit-plus">＋</span> 注册接口
+        </button>
+      </form>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
