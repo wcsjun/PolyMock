@@ -63,7 +63,7 @@ describe('createApp 集成测试', () => {
     const reg = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ method: 'GET', path: '/api/temp', response: { status: 201, body: { temp: true } } }),
+      body: JSON.stringify({ name: '临时接口', method: 'GET', path: '/api/temp', response: { status: 201, body: { temp: true } } }),
     });
     expect(reg.status).toBe(201);
 
@@ -87,6 +87,55 @@ describe('createApp 集成测试', () => {
     expect(res.status).toBe(400);
   });
 
+  it('管理 API：新增接口必须填写名称', async () => {
+    const res = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'GET', path: '/api/no-name' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('名称');
+  });
+
+  it('管理 API：新增接口携带名称，列表返回名称', async () => {
+    const reg = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '查询用户', method: 'GET', path: '/api/named', response: { status: 200, body: {} } }),
+    });
+    expect(reg.status).toBe(201);
+    expect(((await reg.json()) as { route: { name: string } }).route.name).toBe('查询用户');
+
+    const list = await fetch(`${server.baseUrl}/__polymock/routes`);
+    const body = (await list.json()) as { routes: Array<{ path: string; name?: string }> };
+    const named = body.routes.find((r) => r.path === '/api/named');
+    expect(named?.name).toBe('查询用户');
+  });
+
+  it('管理 API：更新名称，缺省名称时保留原值', async () => {
+    const reg = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '旧名称', method: 'GET', path: '/api/renamed', response: { status: 200, body: {} } }),
+    });
+    const created = (await reg.json()) as { route: { id: string } };
+
+    const upd = await fetch(`${server.baseUrl}/__polymock/routes/${created.route.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '新名称' }),
+    });
+    expect(upd.status).toBe(200);
+    expect(((await upd.json()) as { route: { name: string } }).route.name).toBe('新名称');
+
+    const upd2 = await fetch(`${server.baseUrl}/__polymock/routes/${created.route.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'POST' }),
+    });
+    expect(((await upd2.json()) as { route: { name: string } }).route.name).toBe('新名称');
+  });
+
   it('管理 API：新增服务分组并在独立端口分发', async () => {
     const created = await fetch(`${server.baseUrl}/__polymock/services`, {
       method: 'POST',
@@ -103,6 +152,7 @@ describe('createApp 集成测试', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         serviceId: createdServiceId,
+        name: '额外接口',
         method: 'GET',
         path: '/api/extra',
         response: { status: 200, body: { from: 'extra' } },

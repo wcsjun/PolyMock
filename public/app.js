@@ -88,6 +88,7 @@ function buildRouteCard(route, index) {
   const bodyPreview = formatBody(route.response.body);
 
   card.innerHTML = `
+    ${route.name ? `<div class="route-title" title="${escapeHtml(route.name)}">${escapeHtml(route.name)}</div>` : ''}
     <div class="route-row">
       <span class="method-badge">${route.method}</span>
       <span class="route-path" title="${escapeHtml(route.path)}">${escapeHtml(route.path)}</span>
@@ -127,15 +128,19 @@ function render() {
       <div class="service-head">
         <button type="button" class="service-toggle" aria-expanded="${open}">
           <span class="chevron">▸</span>
-          <span class="service-name" title="${escapeHtml(svc.name)}">${escapeHtml(svc.name)}</span>
-          ${svc.isDefault ? '<span class="service-tag">默认</span>' : ''}
-          <span class="service-port">:${svc.port}</span>
+          <span class="service-main">
+            <span class="service-name-row">
+              <span class="service-name" title="${escapeHtml(svc.name)}">${escapeHtml(svc.name)}</span>
+              ${svc.isDefault ? '<span class="service-tag">默认</span>' : ''}
+            </span>
+            <span class="service-port">:${svc.port}</span>
+          </span>
           <span class="service-meta">
             <span class="service-dot ${svc.running ? 'on' : 'off'}" title="${svc.running ? '监听中' : '未监听'}"></span>
             <span>${routes.length} 个接口</span>
           </span>
         </button>
-        ${svc.isDefault ? '' : '<button type="button" class="service-remove" title="删除服务及其接口">×</button>'}
+        ${svc.isDefault ? '<span class="service-remove-ph" aria-hidden="true"></span>' : '<button type="button" class="service-remove" title="删除服务及其接口">×</button>'}
       </div>
       <div class="service-routes"${open ? '' : ' hidden'}>
         ${routes.length === 0 ? '<p class="service-empty">该服务下还没有接口，可在右侧表单添加</p>' : ''}
@@ -222,6 +227,7 @@ function editRoute(route) {
   editingId = route.id;
   const sel = $('#f-service');
   if (services.some((s) => s.id === route.serviceId)) sel.value = route.serviceId;
+  $('#f-name').value = route.name ?? '';
   $('#f-method').value = route.method;
   $('#f-path').value = route.path;
   $('#f-status').value = route.response.status;
@@ -261,12 +267,18 @@ async function removeRoute(route) {
 routeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const serviceId = $('#f-service').value;
+  const name = $('#f-name').value.trim();
   const method = $('#f-method').value;
   const path = $('#f-path').value.trim();
   const status = Number($('#f-status').value) || 200;
 
   if (!path.startsWith('/')) {
     showToast('path 必须以 / 开头', 'err');
+    return;
+  }
+
+  if (!editingId && !name) {
+    showToast('请输入接口名称', 'err');
     return;
   }
 
@@ -288,6 +300,8 @@ routeForm.addEventListener('submit', async (event) => {
   submitBtn.disabled = true;
   try {
     const payload = { serviceId, method, path, response: { status, body: rawBody } };
+    if (!editingId) payload.name = name;
+    else if (name) payload.name = name;
     const url = editingId ? `/__polymock/routes/${editingId}` : '/__polymock/routes';
     await api(url, {
       method: editingId ? 'PUT' : 'POST',

@@ -19,6 +19,7 @@ export interface Route {
   protocol: 'http';
   method: string;
   path: string;
+  name?: string;
   response: RouteResponse;
   createdAt: number;
 }
