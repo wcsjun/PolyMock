@@ -1,9 +1,15 @@
 import type { Server } from 'node:http';
-import type { RouteRegistry } from './registry.js';
-import type { Service } from './types.js';
-import { createRouteApp } from './server.js';
+import type { RouteRegistry } from '../registry.js';
+import type { Service } from '../types.js';
+import { createRouteApp } from './app.js';
 
-export class ServiceManager {
+export interface ServiceManagerLike {
+  isRunning(serviceId: string): boolean;
+  start(service: Service): Promise<void>;
+  stop(serviceId: string): Promise<void>;
+}
+
+export class ServiceManager implements ServiceManagerLike {
   private readonly servers = new Map<string, Server>();
 
   constructor(private readonly registry: RouteRegistry) {}

@@ -1,5 +1,5 @@
-import { createApp } from './server.js';
-import { ServiceManager } from './manager.js';
+import { createApp } from './server/app.js';
+import { ServiceManager } from './server/manager.js';
 import { RouteRegistry } from './registry.js';
 import { loadState, saveState } from './store.js';
 import { DEFAULT_SERVICE_ID } from './types.js';

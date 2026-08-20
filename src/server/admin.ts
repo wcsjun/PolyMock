@@ -1,13 +1,13 @@
 import express from 'express';
-import type { ServiceManager } from './manager.js';
-import type { RouteRegistry } from './registry.js';
-import { DEFAULT_SERVICE_ID, type Route } from './types.js';
+import type { ServiceManagerLike } from './manager.js';
+import type { RouteRegistry } from '../registry.js';
+import { DEFAULT_SERVICE_ID, type Route } from '../types.js';
 
 export interface AdminOptions {
   mainPort: number;
 }
 
-export function createAdminRouter(registry: RouteRegistry, manager: ServiceManager, options: AdminOptions): express.Router {
+export function createAdminRouter(registry: RouteRegistry, manager: ServiceManagerLike, options: AdminOptions): express.Router {
   const router = express.Router();
 
   // ---- 服务分组管理 ----

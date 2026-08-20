@@ -31,22 +31,22 @@ PolyMock 的目标是：**在本地开发时模拟内网接口**，让开发者�
 
 > 建议：若团队日常以 JS/TS 为主，直接选 Node.js + TypeScript；若已有 Go 基础设施，选 Go。两者均可满足需求，不必纠结。
 
-## 目录结构（规划）
+## 目录结构
 
 ```
-polymock/
-├── src/
-│   ├── server/          # 各协议服务器实现（http / websocket / ...）
-│   ├── router/          # 接口注册表与路由分发
-│   ├── responder/       # 固定响应与动态响应（条件分支 / 模板）执行器
-│   ├── config/          # 配置加载与校验
-│   └── index.ts         # 入口：启动所有协议监听
-├── config/
-│   └── mock.config.json # 默认接口配置（示例）
-├── examples/            # 配置示例（多协议、动态响应等）
-├── tests/               # 单元测试与集成测试
-└── package.json
+src/
+  index.ts            # 入口：装配、启动、持久化钩子
+  types.ts            # 领域类型与常量
+  registry.ts         # 接口注册表（服务分组 + 接口，纯领域逻辑）
+  store.ts            # 配置读写（原子写：临时文件 + rename）
+  server/
+    app.ts            # Express 应用组装 + Mock 请求分发
+    admin.ts          # /__polymock 管理 API
+    manager.ts        # 服务生命周期（启停独立端口的服务）
+public/               # Web UI 控制台（原生 HTML/CSS/JS）
 ```
+
+> 测试与被测文件同目录（`*.test.ts`），共享测试工具在 `server/test-utils.ts`。
 
 ## 快速开始
 
@@ -55,8 +55,8 @@ polymock/
 ### 1. 安装与启动
 
 ```bash
-npm install
-npm run start -- --config ./config/mock.config.json
+pnpm install
+pnpm start -- --config ./config/mock.config.json
 ```
 
 ### 2. 配置示例：多协议 + path + 固定/动态响应
