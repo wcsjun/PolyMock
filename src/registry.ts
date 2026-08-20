@@ -54,13 +54,14 @@ export class RouteRegistry extends EventEmitter {
 
   // ---------- 接口 ----------
 
-  add(serviceId: string, method: string, path: string, response: RouteResponse): Route {
+  add(serviceId: string, method: string, path: string, response: RouteResponse, name?: string): Route {
     const route: Route = {
       id: randomUUID(),
       serviceId,
       protocol: 'http',
       method: method.toUpperCase(),
       path,
+      name,
       response,
       createdAt: Date.now(),
     };
@@ -77,7 +78,7 @@ export class RouteRegistry extends EventEmitter {
 
   update(
     id: string,
-    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'response'>>,
+    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response'>>,
   ): { ok: true; route: Route } | { ok: false; error: 'not-found' } | { ok: false; error: 'conflict'; conflict: Route } {
     const current = [...this.routes.values()].find((r) => r.id === id);
     if (!current) return { ok: false, error: 'not-found' };

@@ -77,9 +77,14 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.post('/routes', (req, res) => {
-    const { serviceId, method, path: routePath, response } = req.body ?? {};
+    const { serviceId, name, method, path: routePath, response } = req.body ?? {};
     if (typeof method !== 'string' || typeof routePath !== 'string' || !routePath.startsWith('/')) {
       res.status(400).json({ ok: false, error: 'method 与 path 均为必填字符串，path 需以 / 开头' });
+      return;
+    }
+    const routeName = typeof name === 'string' ? name.trim() : '';
+    if (!routeName) {
+      res.status(400).json({ ok: false, error: '接口名称不能为空' });
       return;
     }
 
@@ -107,7 +112,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       status: response?.status ?? 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
       body,
-    });
+    }, routeName);
     res.status(201).json({ ok: true, route });
   });
 
@@ -123,8 +128,8 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.put('/routes/:id', (req, res) => {
-    const { serviceId, method, path: routePath, response } = req.body ?? {};
-    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'response'>> = {};
+    const { serviceId, name, method, path: routePath, response } = req.body ?? {};
+    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response'>> = {};
 
     if (serviceId !== undefined) {
       if (typeof serviceId !== 'string' || !serviceId) {
@@ -136,6 +141,13 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
         return;
       }
       patch.serviceId = serviceId;
+    }
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        res.status(400).json({ ok: false, error: '接口名称不合法' });
+        return;
+      }
+      patch.name = name.trim();
     }
     if (method !== undefined) {
       if (typeof method !== 'string' || !method) {
@@ -169,7 +181,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     }
 
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / method / path / response）' });
+      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response）' });
       return;
     }
 

@@ -121,4 +121,17 @@ describe('RouteRegistry', () => {
     const result = registry.update('nope', { path: '/api/x' });
     expect(result).toEqual({ ok: false, error: 'not-found' });
   });
+
+  it('新增接口可携带名称，名称可更新', () => {
+    const registry = new RouteRegistry();
+    const route = registry.add(SVC, 'GET', '/api/name', baseResponse, '查询用户');
+    expect(route.name).toBe('查询用户');
+    expect(registry.find(SVC, 'GET', '/api/name')?.name).toBe('查询用户');
+
+    const result = registry.update(route.id, { name: '查询用户v2' });
+    expect(result.ok && result.route.name).toBe('查询用户v2');
+
+    const kept = registry.update(route.id, { path: '/api/name2' });
+    expect(kept.ok && kept.route.name).toBe('查询用户v2');
+  });
 });
