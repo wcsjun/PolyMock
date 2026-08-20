@@ -153,6 +153,162 @@ body {
   text-align: center;
 }
 
+/* ---------- 服务分组 ---------- */
+.services { padding: 12px; display: grid; gap: 8px; }
+
+.service-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+  overflow: hidden;
+  animation: slide-in 0.28s ease both;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.service-card:hover { border-color: var(--line-strong); background: rgba(255, 255, 255, 0.03); }
+
+.service-card.open { border-color: var(--line-strong); }
+
+.service-head { display: flex; align-items: center; }
+
+.service-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.service-toggle:hover .service-name { color: var(--accent); }
+
+.chevron {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  transition: transform 0.2s;
+}
+
+.service-card.open .chevron { transform: rotate(90deg); }
+
+.service-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.service-tag {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(61, 220, 132, 0.3);
+  color: var(--accent);
+}
+
+.service-port { font-size: 12px; color: var(--text-dim); }
+
+.service-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  flex: none;
+}
+
+.service-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.service-dot.on {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.service-remove {
+  flex: none;
+  margin: 8px 10px 8px 0;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--text-faint);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.service-remove:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.service-routes[hidden] { display: none; }
+
+.service-routes {
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.service-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 4px 2px 2px;
+}
+
+.service-form {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 16px;
+}
+
+.service-form input { padding: 8px 10px; font-size: 12px; }
+.service-form input[type="text"] { flex: 1; min-width: 0; }
+.service-form input[type="number"] { width: 86px; flex: none; }
+
+.svc-add {
+  flex: none;
+  width: 38px;
+  border: 1px solid rgba(61, 220, 132, 0.4);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.15s;
+}
+
+.svc-add:hover { filter: brightness(1.15); transform: translateY(-1px); }
+
+.routes-panel .panel-head + .panel-head {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+}
+
+.form-panel select#f-service { width: 100%; }
+
 /* ---------- 接口列表 ---------- */
 .routes { padding: 12px; display: grid; gap: 10px; }
 
@@ -204,8 +360,28 @@ body {
   white-space: nowrap;
 }
 
-.route-remove {
+.route-edit {
   margin-left: auto;
+  flex: none;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--text-faint);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.route-edit:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(61, 220, 132, 0.08);
+}
+
+.route-remove {
   flex: none;
   border: 1px solid var(--line);
   background: none;
@@ -378,6 +554,25 @@ textarea.invalid { border-color: var(--danger); }
 }
 
 .submit-plus { font-size: 16px; }
+
+.form-actions { display: grid; gap: 8px; }
+
+.cancel-btn {
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.cancel-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
 
 /* ---------- Toast ---------- */
 .toast {
