@@ -3,11 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAdminRouter } from './admin.js';
 import type { ServiceManager } from './manager.js';
-import type { RouteRegistry } from './registry.js';
-import { DEFAULT_SERVICE_ID } from './types.js';
+import type { RouteRegistry } from '../registry.js';
+import { DEFAULT_SERVICE_ID } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 
 export interface MainAppOptions {
   mainPort: number;
