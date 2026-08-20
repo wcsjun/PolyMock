@@ -1,7 +1,7 @@
 {
   "name": "polymock",
   "version": "0.1.0",
-  "description": "PolyMock - 支持多协议、可动态注册接口的本地 Mock 服务",
+  "description": "A local mock server with multi-protocol support (HTTP/WebSocket) and dynamic runtime route registration — mock internal APIs during local development without switching networks.",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
