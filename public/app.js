@@ -1,9 +1,9 @@
 const METHOD_COLORS = {
-  GET: '#3ddc84',
-  POST: '#58a6ff',
-  PUT: '#f0a63e',
-  PATCH: '#bc8cff',
-  DELETE: '#f85149',
+  GET: '#0e9f5d',
+  POST: '#1f6feb',
+  PUT: '#b7791f',
+  PATCH: '#8250df',
+  DELETE: '#cf222e',
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -77,7 +77,7 @@ function toggleService(id) {
 }
 
 function buildRouteCard(route, index) {
-  const color = METHOD_COLORS[route.method] || '#7c8a9c';
+  const color = METHOD_COLORS[route.method] || '#5b6b7c';
 
   const card = document.createElement('article');
   card.className = 'route-card';
@@ -317,6 +317,194 @@ routeForm.addEventListener('submit', async (event) => {
   } finally {
     submitBtn.disabled = false;
   }
+});
+
+/* ---------- 视图切换 ---------- */
+
+const VIEW_KEY = 'polymock:view';
+const viewSections = {
+  routes: $('#view-routes'),
+  embed: $('#view-embed'),
+};
+
+function switchView(name) {
+  if (!viewSections[name]) return;
+  for (const [key, el] of Object.entries(viewSections)) el.hidden = key !== name;
+  document.querySelectorAll('.nav-item').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === name);
+  });
+  try { localStorage.setItem(VIEW_KEY, name); } catch { /* 忽略存储失败 */ }
+}
+
+document.querySelectorAll('.nav-item').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    switchView(btn.dataset.view);
+    if (btn.dataset.view === 'embed' && !embedBox.hidden) {
+      clampEmbedSize();
+      updateEmbedSizeLabel();
+    }
+  });
+});
+
+let initialView = 'routes';
+try { initialView = localStorage.getItem(VIEW_KEY) || 'routes'; } catch { /* 忽略 */ }
+switchView(initialView);
+
+/* ---------- 嵌入测试 ---------- */
+
+const embedForm = $('#embed-form');
+const embedUrlInput = $('#embed-url');
+const embedFrame = $('#embed-frame');
+const embedBox = $('#embed-frame-box');
+const embedEmpty = $('#embed-empty');
+const embedSize = $('#embed-size');
+const embedNote = $('#embed-note');
+const embedOpenBtn = $('#embed-open');
+const embedCloseBtn = $('#embed-close');
+const embedStage = $('#embed-stage');
+
+const EMBED_MIN_W = 320;
+const EMBED_MIN_H = 240;
+
+let currentEmbedUrl = '';
+
+function normalizeUrl(raw) {
+  const value = raw.trim();
+  if (!value) return '';
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value) ? value : `http://${value}`;
+}
+
+function updateEmbedSizeLabel() {
+  embedSize.textContent = `${embedBox.offsetWidth} × ${embedBox.offsetHeight}`;
+}
+
+function embedMaxSize() {
+  const pad = getComputedStyle(embedStage);
+  const padX = parseFloat(pad.paddingLeft) + parseFloat(pad.paddingRight);
+  const padY = parseFloat(pad.paddingTop) + parseFloat(pad.paddingBottom);
+  return {
+    maxW: Math.max(EMBED_MIN_W, embedStage.clientWidth - padX),
+    maxH: Math.max(EMBED_MIN_H, embedStage.clientHeight - padY),
+  };
+}
+
+function clampEmbedSize() {
+  const { maxW, maxH } = embedMaxSize();
+  const w = Math.min(Math.max(embedBox.offsetWidth, EMBED_MIN_W), maxW);
+  const h = Math.min(Math.max(embedBox.offsetHeight, EMBED_MIN_H), maxH);
+  embedBox.style.width = `${w}px`;
+  embedBox.style.height = `${h}px`;
+}
+
+embedForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const url = normalizeUrl(embedUrlInput.value);
+  if (!url) {
+    showToast('请输入要嵌入的页面地址', 'err');
+    return;
+  }
+  currentEmbedUrl = url;
+  embedFrame.src = url;
+  embedEmpty.hidden = true;
+  embedBox.hidden = false;
+  embedNote.hidden = false;
+  embedOpenBtn.hidden = false;
+  clampEmbedSize();
+  updateEmbedSizeLabel();
+});
+
+embedOpenBtn.addEventListener('click', () => {
+  if (currentEmbedUrl) window.open(currentEmbedUrl, '_blank', 'noopener');
+});
+
+$('#embed-fill').addEventListener('click', () => {
+  const { maxW, maxH } = embedMaxSize();
+  embedBox.style.width = `${maxW}px`;
+  embedBox.style.height = `${maxH}px`;
+  updateEmbedSizeLabel();
+});
+
+embedCloseBtn.addEventListener('click', () => {
+  embedFrame.src = 'about:blank';
+  currentEmbedUrl = '';
+  embedBox.hidden = true;
+  embedEmpty.hidden = false;
+  embedNote.hidden = true;
+  embedOpenBtn.hidden = true;
+});
+
+document.querySelectorAll('.rz').forEach((handle) => {
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    const dir = handle.dataset.dir;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startW = embedBox.offsetWidth;
+    const startH = embedBox.offsetHeight;
+    const { maxW, maxH } = embedMaxSize();
+
+    handle.setPointerCapture(event.pointerId);
+    embedBox.classList.add('resizing');
+
+    const onMove = (ev) => {
+      if (dir.includes('e')) {
+        const w = Math.min(Math.max(startW + ev.clientX - startX, EMBED_MIN_W), maxW);
+        embedBox.style.width = `${w}px`;
+      }
+      if (dir.includes('s')) {
+        const h = Math.min(Math.max(startH + ev.clientY - startY, EMBED_MIN_H), maxH);
+        embedBox.style.height = `${h}px`;
+      }
+      updateEmbedSizeLabel();
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      embedBox.classList.remove('resizing');
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+});
+
+window.addEventListener('resize', () => {
+  if (!embedBox.hidden && !viewSections.embed.hidden) {
+    clampEmbedSize();
+    updateEmbedSizeLabel();
+  }
+});
+
+/* ---------- 侧边栏宽度拖拽 ---------- */
+
+const SIDEBAR_MIN = 120;
+const SIDEBAR_MAX = 480;
+const sidebarRz = $('#sidebar-rz');
+
+sidebarRz.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  const startX = event.clientX;
+  const startW = document.querySelector('.sidebar').offsetWidth;
+
+  sidebarRz.setPointerCapture(event.pointerId);
+  sidebarRz.classList.add('active');
+  document.body.classList.add('sidebar-resizing');
+
+  const onMove = (ev) => {
+    const w = Math.min(Math.max(startW + ev.clientX - startX, SIDEBAR_MIN), SIDEBAR_MAX);
+    document.documentElement.style.setProperty('--sidebar-w', `${w}px`);
+  };
+  const onUp = () => {
+    sidebarRz.removeEventListener('pointermove', onMove);
+    sidebarRz.removeEventListener('pointerup', onUp);
+    sidebarRz.removeEventListener('pointercancel', onUp);
+    sidebarRz.classList.remove('active');
+    document.body.classList.remove('sidebar-resizing');
+  };
+  sidebarRz.addEventListener('pointermove', onMove);
+  sidebarRz.addEventListener('pointerup', onUp);
+  sidebarRz.addEventListener('pointercancel', onUp);
 });
 
 /* ---------- 启动 ---------- */
