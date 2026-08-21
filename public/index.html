@@ -7,91 +7,150 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">◈</span>
-      <span class="brand-name">PolyMock</span>
-      <span class="brand-sub">本地接口模拟</span>
-    </div>
-    <div class="topbar-meta">
-      <span class="status-dot" id="status-dot"></span>
-      <span id="status-text">连接中</span>
-      <span class="meta-sep">·</span>
-      <span>HTTP 协议</span>
-      <span class="meta-sep">·</span>
-      <span id="route-count">0 个接口</span>
-    </div>
-  </header>
-
-  <main class="layout">
-    <section class="panel routes-panel">
-      <div class="panel-head">
-        <h2>服务分组</h2>
-        <span class="count-badge" id="svc-count">0</span>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">◈</span>
+        <div class="brand-text">
+          <span class="brand-name">PolyMock</span>
+          <span class="brand-sub">本地接口模拟</span>
+        </div>
       </div>
 
-      <div id="services" class="services" aria-live="polite"></div>
+      <nav class="nav" aria-label="视图切换">
+        <button type="button" class="nav-item active" data-view="routes">
+          <span class="nav-icon">⌗</span>
+          <span>接口管理</span>
+        </button>
+        <button type="button" class="nav-item" data-view="embed">
+          <span class="nav-icon">⛶</span>
+          <span>嵌入测试</span>
+        </button>
+      </nav>
 
-      <form id="service-form" class="service-form" autocomplete="off">
-        <input id="s-name" name="name" type="text" placeholder="服务名称，如 订单服务" spellcheck="false">
-        <input id="s-port" name="port" type="number" placeholder="端口" min="1" max="65535">
-        <button type="submit" class="svc-add" title="新增服务（独立端口监听）">＋</button>
-      </form>
-    </section>
-
-    <aside class="panel form-panel">
-      <div class="panel-head">
-        <h2>新增接口</h2>
+      <div class="sidebar-foot">
+        <div class="foot-row">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">连接中</span>
+        </div>
+        <div class="foot-row dim">
+          <span>HTTP 协议</span>
+          <span class="meta-sep">·</span>
+          <span id="route-count">0 个接口</span>
+        </div>
       </div>
 
-      <form id="route-form" autocomplete="off">
-        <div class="field">
-          <label for="f-service">服务分组</label>
-          <select id="f-service" name="serviceId"></select>
-        </div>
-
-        <div class="field">
-          <label for="f-name">接口名称</label>
-          <input id="f-name" name="name" type="text" placeholder="如 查询用户信息" spellcheck="false">
-        </div>
-
-        <div class="field">
-          <label for="f-method">请求方法</label>
-          <div class="method-row">
-            <select id="f-method" name="method">
-              <option value="GET" selected>GET</option>
-              <option value="POST">POST</option>
-              <option value="PUT">PUT</option>
-              <option value="PATCH">PATCH</option>
-              <option value="DELETE">DELETE</option>
-            </select>
-            <input id="f-path" name="path" type="text" placeholder="/api/user/info" spellcheck="false" autofocus>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="f-status">响应状态码</label>
-          <input id="f-status" name="status" type="number" value="200" min="100" max="599">
-        </div>
-
-        <div class="field">
-          <div class="label-row">
-            <label for="f-body">响应 Body（JSON）</label>
-            <span class="hint">留空则返回空对象</span>
-          </div>
-          <textarea id="f-body" name="body" rows="8" placeholder='{&#10;  "code": 0,&#10;  "data": {&#10;    "id": 1001,&#10;    "name": "PolyMock"&#10;  }&#10;}' spellcheck="false"></textarea>
-          <p class="field-error" id="body-error" hidden>body 不是合法的 JSON</p>
-        </div>
-
-        <div class="form-actions">
-          <button type="submit" class="submit-btn" id="submit-btn">
-            <span class="submit-plus">＋</span> 注册接口
-          </button>
-          <button type="button" class="cancel-btn" id="cancel-btn" hidden>取消编辑</button>
-        </div>
-      </form>
+      <div class="sidebar-rz" id="sidebar-rz" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度" title="拖拽调整侧边栏宽度"></div>
     </aside>
-  </main>
+
+    <main class="main">
+      <!-- 接口管理 -->
+      <section id="view-routes" class="view">
+        <div class="layout">
+          <section class="panel routes-panel">
+            <div class="panel-head">
+              <h2>服务分组</h2>
+              <span class="count-badge" id="svc-count">0</span>
+            </div>
+
+            <div id="services" class="services" aria-live="polite"></div>
+
+            <form id="service-form" class="service-form" autocomplete="off">
+              <input id="s-name" name="name" type="text" placeholder="服务名称，如 订单服务" spellcheck="false">
+              <input id="s-port" name="port" type="number" placeholder="端口" min="1" max="65535">
+              <button type="submit" class="svc-add" title="新增服务（独立端口监听）">＋</button>
+            </form>
+          </section>
+
+          <aside class="panel form-panel">
+            <div class="panel-head">
+              <h2>新增接口</h2>
+            </div>
+
+            <form id="route-form" autocomplete="off">
+              <div class="field">
+                <label for="f-service">服务分组</label>
+                <select id="f-service" name="serviceId"></select>
+              </div>
+
+              <div class="field">
+                <label for="f-name">接口名称</label>
+                <input id="f-name" name="name" type="text" placeholder="如 查询用户信息" spellcheck="false">
+              </div>
+
+              <div class="field">
+                <label for="f-method">请求方法</label>
+                <div class="method-row">
+                  <select id="f-method" name="method">
+                    <option value="GET" selected>GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                    <option value="DELETE">DELETE</option>
+                  </select>
+                  <input id="f-path" name="path" type="text" placeholder="/api/user/info" spellcheck="false" autofocus>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="f-status">响应状态码</label>
+                <input id="f-status" name="status" type="number" value="200" min="100" max="599">
+              </div>
+
+              <div class="field">
+                <div class="label-row">
+                  <label for="f-body">响应 Body（JSON）</label>
+                  <span class="hint">留空则返回空对象</span>
+                </div>
+                <textarea id="f-body" name="body" rows="8" placeholder='{&#10;  "code": 0,&#10;  "data": {&#10;    "id": 1001,&#10;    "name": "PolyMock"&#10;  }&#10;}' spellcheck="false"></textarea>
+                <p class="field-error" id="body-error" hidden>body 不是合法的 JSON</p>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="submit-btn" id="submit-btn">
+                  <span class="submit-plus">＋</span> 注册接口
+                </button>
+                <button type="button" class="cancel-btn" id="cancel-btn" hidden>取消编辑</button>
+              </div>
+            </form>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 嵌入测试 -->
+      <section id="view-embed" class="view" hidden>
+        <div class="embed-layout">
+          <form id="embed-form" class="embed-bar panel" autocomplete="off">
+            <input id="embed-url" name="url" type="text" placeholder="输入要嵌入的页面地址，如 http://localhost:3000/api/hello" spellcheck="false">
+            <button type="submit" class="embed-load">加载</button>
+            <button type="button" class="embed-open" id="embed-open" title="在新标签页打开" hidden>↗</button>
+          </form>
+          <p class="embed-note" id="embed-note" hidden>若下方区域空白，说明目标站点可能通过 X-Frame-Options / CSP 禁止被嵌入，可点击 ↗ 在新标签页验证。</p>
+
+          <div class="embed-stage" id="embed-stage">
+            <div class="embed-empty" id="embed-empty">
+              <div class="empty-glyph">⛶</div>
+              <p class="empty-title">输入地址并加载，把任意网页嵌入此处测试</p>
+              <p class="empty-desc">容器的宽高可通过拖拽右／下／右下角边缘自由调整</p>
+            </div>
+
+            <div class="embed-frame" id="embed-frame-box" hidden>
+              <div class="embed-frame-head">
+                <span class="embed-size" id="embed-size">— × —</span>
+                <span class="embed-hint">拖拽右／下／右下角调整宽高</span>
+                <button type="button" class="embed-fill" id="embed-fill" title="铺满画布区域">铺满</button>
+                <button type="button" class="embed-close" id="embed-close" title="关闭">×</button>
+              </div>
+              <iframe id="embed-frame" title="嵌入式页面容器"></iframe>
+              <div class="rz rz-e" data-dir="e" role="separator" aria-orientation="vertical" aria-label="调整宽度"></div>
+              <div class="rz rz-s" data-dir="s" role="separator" aria-orientation="horizontal" aria-label="调整高度"></div>
+              <div class="rz rz-se" data-dir="se" role="separator" aria-label="调整宽高"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
 
