@@ -15,6 +15,12 @@ export interface Route {
   path: string;
   name?: string;
   response: RouteResponse;
+  /** 默认响应的前置条件；仅 requireMatch 为 true 时作为接口准入门槛参与校验 */
+  request?: RouteRequest;
+  /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则返回 400 */
+  requireMatch?: boolean;
+  /** 响应变体，按数组顺序优先于默认响应匹配 */
+  variants?: ResponseVariant[];
   createdAt: number;
 }
 
@@ -23,6 +29,27 @@ export interface RouteResponse {
   status: number;
   contentType?: string;
   body: unknown;
+}
+
+/** 单条请求匹配条件（key 精确比对，value 字符串化比对） */
+export interface RequestCondition {
+  key: string;
+  value: string;
+}
+
+/** 接口的预期请求条件：headers 不区分大小写、query 参数、JSON body 点路径 */
+export interface RouteRequest {
+  query?: RequestCondition[];
+  headers?: RequestCondition[];
+  body?: RequestCondition[];
+}
+
+/** 同一接口下的响应变体：按数组顺序匹配，第一个条件全部通过的生效 */
+export interface ResponseVariant {
+  id: string;
+  name: string;
+  match?: RouteRequest;
+  response: RouteResponse;
 }
 
 /** GET /__polymock/services 返回的服务分组（含管理 API 派生字段） */
@@ -43,4 +70,11 @@ export interface RoutePayload {
   path: string;
   name?: string;
   response: { status: number; body: string };
+  request?: RouteRequest;
+  requireMatch?: boolean;
+  variants?: Array<{
+    name: string;
+    match?: RouteRequest;
+    response: { status: number; body: string };
+  }>;
 }

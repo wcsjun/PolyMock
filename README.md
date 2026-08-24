@@ -166,6 +166,42 @@ curl -X POST http://localhost:8080/__polymock/routes \
 curl -X DELETE http://localhost:8080/__polymock/routes/http/api/temp/foo
 ```
 
+### 3.1 请求条件、校验开关与响应变体
+
+注册接口时可附加三类可选字段（均可通过 Web UI 编辑）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `request` | object | 接口准入条件，含 `query` / `headers` / `body` 三组 `{key, value}` 列表；`body` 支持 JSON 点路径（如 `user.id`） |
+| `requireMatch` | boolean | 开启后：所有请求必须满足 `request` 条件才能访问该接口（**优先于变体匹配**），否则返回 **400** 并说明不匹配原因 |
+| `variants[]` | array | 响应变体，按数组顺序匹配：第一个条件全部通过的变体生效；全不命中走默认响应。每项含 `name`（非空）、`match?`（条件，缺省=总是命中）、`response` |
+
+> 校验顺序：先 requireMatch 准入门槛，再变体分流，最后默认响应——因此开启开关后，即使存在无条件变体，不满足条件的请求也会被 400 拒绝。
+
+```bash
+# 同一接口按请求头返回不同响应；无命中回退默认响应
+curl -X POST http://localhost:8080/__polymock/routes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "订单查询",
+    "method": "GET",
+    "path": "/api/orders",
+    "requireMatch": true,
+    "request": { "headers": [{ "key": "X-Token", "value": "abc" }] },
+    "variants": [
+      { "name": "管理员视角", "match": { "headers": [{ "key": "X-Role", "value": "admin" }] },
+        "response": { "status": 200, "body": { "role": "admin" } } }
+    ],
+    "response": { "status": 200, "body": { "role": "default" } }
+  }'
+
+curl http://localhost:8080/api/orders                      # 400（缺 X-Token）
+curl -H "X-Token: abc" http://localhost:8080/api/orders    # {"role":"default"}
+curl -H "X-Token: abc" -H "X-Role: admin" http://localhost:8080/api/orders  # {"role":"admin"}
+```
+
+> 旧配置文件（无这三个字段）无需迁移，行为与之前完全一致。
+
 ## 配置说明
 
 | 字段 | 类型 | 必填 | 说明 |
