@@ -134,4 +134,39 @@ describe('RouteRegistry', () => {
     const kept = registry.update(route.id, { path: '/api/name2' });
     expect(kept.ok && kept.route.name).toBe('查询用户v2');
   });
+
+  it('请求条件与校验开关可持久化往返', () => {
+    const registry = new RouteRegistry();
+    const request = { headers: [{ key: 'X-Token', value: 'abc' }], query: [{ key: 'id', value: '1' }], body: [{ key: 'user.id', value: '1' }] };
+    const route = registry.add(SVC, 'GET', '/api/guard', baseResponse, undefined, request, true);
+
+    expect(route.requireMatch).toBe(true);
+    const restored = new RouteRegistry(registry.toJSON());
+    const back = restored.find(SVC, 'GET', '/api/guard');
+    expect(back?.requireMatch).toBe(true);
+    expect(back?.request).toEqual(request);
+
+    const cleared = restored.update(back!.id, { request: {}, requireMatch: false });
+    expect(cleared.ok && cleared.route.request).toEqual({});
+    expect(cleared.ok && cleared.route.requireMatch).toBe(false);
+  });
+
+  it('响应变体可持久化往返且 id 保持稳定', () => {
+    const registry = new RouteRegistry();
+    const variants = [
+      { id: 'v-1', name: '管理员', match: { headers: [{ key: 'X-Role', value: 'admin' }] }, response: { status: 200, body: { role: 'admin' } } },
+      { id: 'v-2', name: '游客', response: { status: 403, body: { role: 'guest' } } },
+    ];
+    const route = registry.add(SVC, 'GET', '/api/variant', baseResponse, undefined, undefined, false, variants);
+
+    const restored = new RouteRegistry(registry.toJSON());
+    const back = restored.find(SVC, 'GET', '/api/variant');
+    expect(back?.variants).toHaveLength(2);
+    expect(back?.variants?.[0].id).toBe('v-1');
+    expect(back?.variants?.[0].match?.headers?.[0]).toEqual({ key: 'X-Role', value: 'admin' });
+    expect(back?.variants?.[1].response.status).toBe(403);
+
+    const replaced = restored.update(route.id, { variants: [variants[1]] });
+    expect(replaced.ok && replaced.route.variants).toEqual([variants[1]]);
+  });
 });

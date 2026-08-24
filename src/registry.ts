@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { PersistedState, Route, RouteResponse, Service } from './types.js';
+import type {
+  PersistedState,
+  ResponseVariant,
+  Route,
+  RouteRequest,
+  RouteResponse,
+  Service,
+} from './types.js';
 
 export class RouteRegistry extends EventEmitter {
   private readonly services = new Map<string, Service>();
@@ -54,7 +61,16 @@ export class RouteRegistry extends EventEmitter {
 
   // ---------- 接口 ----------
 
-  add(serviceId: string, method: string, path: string, response: RouteResponse, name?: string): Route {
+  add(
+    serviceId: string,
+    method: string,
+    path: string,
+    response: RouteResponse,
+    name?: string,
+    request?: RouteRequest,
+    requireMatch?: boolean,
+    variants?: ResponseVariant[],
+  ): Route {
     const route: Route = {
       id: randomUUID(),
       serviceId,
@@ -63,6 +79,9 @@ export class RouteRegistry extends EventEmitter {
       path,
       name,
       response,
+      request,
+      requireMatch,
+      variants,
       createdAt: Date.now(),
     };
     this.routes.set(RouteRegistry.key(serviceId, route.method, path), route);
@@ -78,7 +97,7 @@ export class RouteRegistry extends EventEmitter {
 
   update(
     id: string,
-    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response'>>,
+    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants'>>,
   ): { ok: true; route: Route } | { ok: false; error: 'not-found' } | { ok: false; error: 'conflict'; conflict: Route } {
     const current = [...this.routes.values()].find((r) => r.id === id);
     if (!current) return { ok: false, error: 'not-found' };
