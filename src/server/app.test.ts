@@ -1,10 +1,14 @@
 import type { Express } from 'express';
+import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { ServiceManager } from './manager.js';
 import { RouteRegistry } from '../registry.js';
 import { DEFAULT_SERVICE_ID } from '../types.js';
 import { getFreePort, listen, type TestServer } from './test-utils.js';
+
+// public/ 为 vite 构建产物（见 .gitignore），未执行 pnpm build 的全新克隆中不存在，此时跳过静态资源用例
+const webUiBuilt = fs.existsSync(new URL('../../public/index.html', import.meta.url));
 
 describe('createApp 集成测试', () => {
   let registry: RouteRegistry;
@@ -42,7 +46,7 @@ describe('createApp 集成测试', () => {
     expect(body.ok).toBe(false);
   });
 
-  it('静态资源：根路径返回 Web UI', async () => {
+  it.skipIf(!webUiBuilt)('静态资源：根路径返回 Web UI', async () => {
     const res = await fetch(`${server.baseUrl}/`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
