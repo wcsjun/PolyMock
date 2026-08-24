@@ -43,7 +43,14 @@ src/
     app.ts            # Express 应用组装 + Mock 请求分发
     admin.ts          # /__polymock 管理 API
     manager.ts        # 服务生命周期（启停独立端口的服务）
-public/               # Web UI 控制台（原生 HTML/CSS/JS）
+web/                  # Web UI 控制台前端源码（Vue 3 SFC + Vite）
+  index.html          # Vite 入口（挂载点 <div id="app">）
+  vite.config.ts      # 构建输出 ../public；dev 代理 /__polymock -> localhost:8080
+  src/
+    main.ts           # createApp(App).mount('#app')
+    App.vue           # 整体骨架：sidebar + 视图切换 + toast + 轮询
+    components/       # ServicePanel / RouteCard / RouteForm / EmbedTest
+public/               # Web UI 静态资源（vite build 的构建产物，不入库，由 Express 托管）
 ```
 
 > 测试与被测文件同目录（`*.test.ts`），共享测试工具在 `server/test-utils.ts`。
@@ -56,8 +63,12 @@ public/               # Web UI 控制台（原生 HTML/CSS/JS）
 
 ```bash
 pnpm install
+pnpm build        # tsc 编译后端到 dist + vite build 构建前端到 public/
 pnpm start -- --config ./config/mock.config.json
 ```
+
+> `public/` 是前端构建产物（不入库），克隆后必须先执行 `pnpm build` 才能看到 Web UI。
+> 前端开发可用 `pnpm dev:web` 启动 Vite dev server（HMR，`/__polymock` 请求代理到本地 8080 后端），配合 `pnpm dev` 使用。
 
 ### 2. 配置示例：多协议 + path + 固定/动态响应
 

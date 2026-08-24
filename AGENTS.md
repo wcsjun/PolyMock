@@ -5,7 +5,7 @@
 
 ## 项目概览
 
-- 技术栈：Node.js 18+ / TypeScript（NodeNext）/ Express 5 / Vitest
+- 技术栈：Node.js 18+ / TypeScript（NodeNext）/ Express 5 / Vitest；前端为 Vue 3 + Vite（源码在 `web/`）
 - 包管理器：**pnpm**（锁定文件为 `pnpm-lock.yaml`）
 - 入口：`src/index.ts`；构建产物输出到 `dist/`
 - 关键行为：管理 API 挂载在 `/__polymock`；Mock 请求按 `(serviceId, method, path)` 在注册表查找响应
@@ -27,7 +27,7 @@
 4. 不得修改 `pnpm-lock.yaml`，除非任务明确要求安装/升级依赖。
 5. 涉及多文件或行为变更的改动，先给出改动计划，经确认后再实现。
 6. 完成一个逻辑单元后，提示用户提交 git；**不要自行提交/推送**，除非被明确要求。
-7. 前端（`public/`）是手写原生 HTML/CSS/JS。改动后必须提示用户打开 Web UI 手动验证，或给出可复现的验证步骤。
+7. 前端（`web/`）是 Vue 3 + Vite 项目（`public/` 为构建产物，不入库）。改动前端后必须运行 `pnpm typecheck:web` 与 `pnpm build:web`，并提示用户打开 Web UI 手动验证，或给出可复现的验证步骤。
 
 ## 目录结构
 
@@ -41,6 +41,19 @@ src/
     app.ts            # Express 应用组装 + Mock 请求分发
     admin.ts          # /__polymock 管理 API
     manager.ts        # 服务生命周期（启停独立端口的服务）
+web/                  # Web UI 前端源码（Vue 3 SFC + Vite，依赖装在根 package.json）
+  index.html          # Vite 入口（挂载点 <div id="app">）
+  vite.config.ts      # 构建产物输出 ../public；dev 代理 /__polymock -> localhost:8080
+  tsconfig.json       # 前端类型检查（vue-tsc -p web/tsconfig.json）
+  src/
+    main.ts           # createApp(App).mount('#app')，引入全局样式
+    App.vue           # 整体骨架：sidebar + 视图切换 + toast + 轮询
+    api.ts            # fetch 封装（/__polymock 管理 API）
+    types.ts          # 前端类型（镜像后端字段）
+    utils.ts          # method 色板 / body 格式化等共享工具
+    styles/global.css # 全局样式（沿用原控制台视觉）
+    components/       # ServicePanel / RouteCard / RouteForm / EmbedTest
+public/               # ⚠️ 纯构建产物（vite build 输出，不入库）；Express 托管该目录
 测试与被测文件同目录（*.test.ts），共享工具在 test-utils.ts
 ```
 
@@ -48,12 +61,17 @@ src/
 
 | 命令 | 作用 |
 | --- | --- |
-| `pnpm dev` | tsx watch 热启动 |
-| `pnpm build` | tsc 编译到 dist |
+| `pnpm dev` | tsx watch 热启动（后端） |
+| `pnpm dev:web` | Vite dev server（前端 HMR，代理 /__polymock 到 8080） |
+| `pnpm build` | tsc 编译到 dist + vite build 输出 public/（start 前必须先执行） |
+| `pnpm build:web` | 仅构建前端（vite build → public/） |
 | `pnpm start` | 运行 dist/index.js |
 | `pnpm typecheck` | 类型检查（应用 + 测试） |
+| `pnpm typecheck:web` | 前端类型检查（vue-tsc） |
 | `pnpm test` | 运行全部测试 |
 | `pnpm test:watch` | 监听模式跑测试 |
+
+> 克隆后首次运行：`pnpm install && pnpm build`（public/ 不入库，需先构建前端才能看到 Web UI）。
 
 ## 数据流（后端视角）
 
