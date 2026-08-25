@@ -384,6 +384,108 @@ describe('createApp 集成测试', () => {
     expect(await catchAll.json()).toEqual({ role: 'catch-all' });
   });
 
+  it('条件类型：number/boolean/json 按类型比对，选填与存在性匹配生效', async () => {
+    await registerRoute({
+      name: '类型比对接口',
+      method: 'POST',
+      path: '/api/typed',
+      variants: [
+        {
+          name: '数值+布尔',
+          match: {
+            query: [{ key: 'page', value: '2', type: 'number' }],
+            headers: [{ key: 'X-Flag', value: 'true', type: 'boolean' }],
+            body: [
+              { key: 'amount', value: '9999', type: 'number' },
+              { key: 'active', value: 'true', type: 'boolean' },
+            ],
+          },
+          response: { body: { hit: 'typed' } },
+        },
+        {
+          name: 'JSON 深度相等',
+          match: { body: [{ key: 'filter.tags', value: '["a","b"]', type: 'json' }] },
+          response: { body: { hit: 'json' } },
+        },
+        {
+          name: '存在性与选填',
+          match: {
+            body: [
+              { key: 'remark', value: '', required: true },
+              { key: 'coupon', value: 'x', required: false },
+            ],
+          },
+          response: { body: { hit: 'exists' } },
+        },
+      ],
+      response: { status: 200, body: { hit: 'default' } },
+    });
+
+    const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+      fetch(`${server.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+
+    /* number/boolean：数字 9999、布尔 true 与字符串期望按类型比对通过 */
+    const typed = await post('/api/typed?page=2', { amount: 9999, active: true }, { 'X-Flag': 'true' });
+    expect(await typed.json()).toEqual({ hit: 'typed' });
+
+    /* number 不匹配（9998）→ 该变体不命中 */
+    const wrongNum = await post('/api/typed?page=2', { amount: 9998, active: true }, { 'X-Flag': 'true' });
+    expect(await wrongNum.json()).toEqual({ hit: 'default' });
+
+    /* json 深度相等 */
+    const jsonHit = await post('/api/typed', { filter: { tags: ['a', 'b'] } });
+    expect(await jsonHit.json()).toEqual({ hit: 'json' });
+
+    /* json 数组顺序不同 → 不等 */
+    const jsonMiss = await post('/api/typed', { filter: { tags: ['b', 'a'] } });
+    expect(await jsonMiss.json()).toEqual({ hit: 'default' });
+
+    /* 存在性匹配：remark 存在即可（值任意）；选填 coupon 缺失也通过 */
+    const existsHit = await post('/api/typed', { remark: 'anything' });
+    expect(await existsHit.json()).toEqual({ hit: 'exists' });
+
+    /* 必填存在性：remark 缺失 → 不命中 */
+    const existsMiss = await post('/api/typed', {});
+    expect(await existsMiss.json()).toEqual({ hit: 'default' });
+
+    /* 选填：coupon 存在但值不等 → 不命中 */
+    const optionalMiss = await post('/api/typed', { remark: 'x', coupon: 'y' });
+    expect(await optionalMiss.json()).toEqual({ hit: 'default' });
+
+    /* 选填 body 条件 + 请求体缺失：全部按字段缺失通过 */
+    const noBody = await fetch(`${server.baseUrl}/api/typed`, { method: 'POST' });
+    expect(await noBody.json()).toEqual({ hit: 'default' });
+
+    /* 注册后条件字段原样返回 */
+    const list = await fetch(`${server.baseUrl}/__polymock/routes`);
+    const routes = ((await list.json()) as { routes: Array<{ path: string; variants?: Array<{ match?: { body?: Array<Record<string, unknown>> } }> }> }).routes;
+    const typedRoute = routes.find((r) => r.path === '/api/typed');
+    expect(typedRoute?.variants?.[0].match?.body?.[0]).toMatchObject({ key: 'amount', value: '9999', type: 'number' });
+    expect(typedRoute?.variants?.[2].match?.body?.[1]).toMatchObject({ key: 'coupon', required: false });
+  });
+
+  it('管理 API：条件的 type/required 不合法时返回 400', async () => {
+    const badType = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏类型', method: 'GET', path: '/api/bad-type', request: { headers: [{ key: 'a', value: 'b', type: 'regex' }] } }),
+    });
+    expect(badType.status).toBe(400);
+    expect(((await badType.json()) as { error: string }).error).toContain('type');
+
+    const badRequired = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏必填', method: 'GET', path: '/api/bad-required', request: { headers: [{ key: 'a', value: 'b', required: 'yes' }] } }),
+    });
+    expect(badRequired.status).toBe(400);
+    expect(((await badRequired.json()) as { error: string }).error).toContain('required');
+  });
+
   it('管理 API：variants 与 request 参数不合法时返回 400', async () => {
     const badName = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',

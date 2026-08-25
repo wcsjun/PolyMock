@@ -177,9 +177,9 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 400px;
+  grid-template-columns: minmax(0, 1fr) minmax(500px, 620px);
   gap: 22px;
-  max-width: 1240px;
+  max-width: 1400px;
   margin: 0 auto;
   align-items: start;
 }
@@ -360,8 +360,6 @@ body {
   background: rgba(207, 34, 46, 0.06);
 }
 
-.service-routes[hidden] { display: none; }
-
 .service-routes {
   padding: 10px 12px 12px;
   display: grid;
@@ -408,8 +406,6 @@ body {
 .form-panel select#f-service { width: 100%; }
 
 /* ---------- 接口列表 ---------- */
-.routes { padding: 12px; display: grid; gap: 10px; }
-
 .route-card {
   border: 1px solid var(--line);
   border-left: 3px solid var(--method-color, var(--text-dim));
@@ -543,11 +539,6 @@ body {
 }
 
 /* ---------- 空状态 ---------- */
-.empty {
-  padding: 70px 20px;
-  text-align: center;
-}
-
 .empty-glyph {
   font-size: 46px;
   color: var(--line-strong);
@@ -971,63 +962,6 @@ body.sidebar-resizing iframe { pointer-events: none; }
   font-weight: 700;
 }
 
-.kv-editor { display: grid; gap: 8px; }
-
-.kv-rows { display: grid; gap: 6px; }
-
-.kv-row { display: flex; gap: 6px; align-items: center; }
-
-.kv-key, .kv-value {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 9px !important;
-  font-size: 12px !important;
-}
-
-.kv-remove {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: none;
-  color: var(--text-faint);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.kv-remove:hover {
-  color: var(--danger);
-  border-color: var(--danger);
-  background: rgba(207, 34, 46, 0.06);
-}
-
-.kv-add {
-  justify-self: start;
-  padding: 5px 12px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 6px;
-  background: none;
-  color: var(--text-dim);
-  font-family: var(--mono);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.kv-add:hover {
-  color: var(--accent-strong);
-  border-color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.kv-empty {
-  font-size: 11px;
-  color: var(--text-faint);
-}
-
 /* ---------- 校验开关 ---------- */
 .switch-field { margin-top: -4px; }
 
@@ -1092,86 +1026,3 @@ body.sidebar-resizing iframe { pointer-events: none; }
 
 /* ---------- 响应变体编辑器 ---------- */
 .block-hint { margin-bottom: 8px; }
-
-.variant-add {
-  padding: 4px 10px;
-  border: 1px solid rgba(14, 159, 93, 0.4);
-  border-radius: 6px;
-  background: var(--accent-dim);
-  color: var(--accent-strong);
-  font-family: var(--mono);
-  font-size: 11px;
-  cursor: pointer;
-  transition: filter 0.15s;
-}
-
-.variant-add:hover { filter: brightness(1.05); }
-
-.variant-card {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg-soft);
-  padding: 10px;
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.variant-head { display: flex; gap: 6px; align-items: center; }
-
-.variant-name {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 9px !important;
-  font-size: 12px !important;
-  background: var(--bg) !important;
-}
-
-.variant-btn {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: none;
-  color: var(--text-faint);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.variant-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--line-strong);
-  background: var(--bg);
-}
-
-.variant-btn:disabled { opacity: 0.35; cursor: default; }
-
-.variant-btn.danger:hover {
-  color: var(--danger);
-  border-color: var(--danger);
-  background: rgba(207, 34, 46, 0.06);
-}
-
-.variant-resp { display: flex; gap: 6px; }
-
-.variant-resp input[type='number'] {
-  flex: none;
-  width: 86px;
-  padding: 7px 9px !important;
-  font-size: 12px !important;
-  background: var(--bg) !important;
-}
-
-.variant-resp textarea {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  resize: vertical;
-  line-height: 1.5;
-  padding: 7px 9px !important;
-  font-size: 12px !important;
-  background: var(--bg) !important;
-}
