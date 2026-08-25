@@ -31,10 +31,26 @@ export interface RouteResponse {
   body: unknown;
 }
 
+/** 条件值比对方式（后端 ConditionType 镜像）；缺省 string 字符串化比对 */
+export type ConditionType = 'string' | 'number' | 'boolean' | 'json';
+
 /** 单条请求匹配条件（key 精确比对，value 字符串化比对） */
 export interface RequestCondition {
   key: string;
   value: string;
+  /** 比对方式；json 表示期望值为 JSON 字面量并做深度相等比对 */
+  type?: ConditionType;
+  /** 必填：请求缺少该 key 即条件失败；false 时 key 缺失视为通过（存在才比对）。缺省 true */
+  required?: boolean;
+}
+
+/** 条件表格行草稿：enabled 为纯前端状态，未启用的行不参与提交 */
+export interface ConditionRow {
+  key: string;
+  value: string;
+  type: ConditionType;
+  required: boolean;
+  enabled: boolean;
 }
 
 /** 接口的预期请求条件：headers 不区分大小写、query 参数、JSON body 点路径 */

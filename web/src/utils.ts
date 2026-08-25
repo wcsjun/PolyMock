@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'vue';
-import type { RequestCondition, RouteRequest } from './types';
+import type { ConditionRow, RequestCondition, RouteRequest } from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -20,16 +20,40 @@ export function formatBody(body: unknown): string {
   return JSON.stringify(body, null, 2);
 }
 
+/** 表格行 → 提交条件：过滤未启用与空 key 行；type=string、required=true 为缺省值不写入 */
+export function rowsToConditions(rows: ConditionRow[]): RequestCondition[] {
+  const list: RequestCondition[] = [];
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (!row.enabled || !key) continue;
+    const condition: RequestCondition = { key, value: row.value };
+    if (row.type !== 'string') condition.type = row.type;
+    if (!row.required) condition.required = false;
+    list.push(condition);
+  }
+  return list;
+}
+
+/** 提交条件 → 表格行（编辑回填，缺省值补全） */
+export function conditionsToRows(conditions?: RequestCondition[]): ConditionRow[] {
+  return (conditions ?? []).map((condition) => ({
+    key: condition.key,
+    value: condition.value,
+    type: condition.type ?? 'string',
+    required: condition.required !== false,
+    enabled: true,
+  }));
+}
+
 /** 过滤空 key 行后组装 RouteRequest；三组全空时返回 undefined */
 export function buildRouteRequest(
-  query: RequestCondition[],
-  headers: RequestCondition[],
-  body: RequestCondition[],
+  query: ConditionRow[],
+  headers: ConditionRow[],
+  body: ConditionRow[],
 ): RouteRequest | undefined {
-  const clean = (rows: RequestCondition[]) => rows.filter((r) => r.key.trim());
-  const q = clean(query);
-  const h = clean(headers);
-  const b = clean(body);
+  const q = rowsToConditions(query);
+  const h = rowsToConditions(headers);
+  const b = rowsToConditions(body);
   if (!q.length && !h.length && !b.length) return undefined;
   const request: RouteRequest = {};
   if (q.length) request.query = q;
@@ -40,24 +64,31 @@ export function buildRouteRequest(
 
 /** 拆解 RouteRequest 为三组可编辑行（编辑回填用） */
 export function splitRouteRequest(request?: RouteRequest): {
-  query: RequestCondition[];
-  headers: RequestCondition[];
-  body: RequestCondition[];
+  query: ConditionRow[];
+  headers: ConditionRow[];
+  body: ConditionRow[];
 } {
   return {
-    query: [...(request?.query ?? [])],
-    headers: [...(request?.headers ?? [])],
-    body: [...(request?.body ?? [])],
+    query: conditionsToRows(request?.query),
+    headers: conditionsToRows(request?.headers),
+    body: conditionsToRows(request?.body),
   };
 }
 
 /** 条件摘要文案，如「Header X-Role=admin」；用于卡片变体列表 */
 export function conditionSummary(request?: RouteRequest): string[] {
   if (!request) return ['无条件（总是命中）'];
+  const format = (label: string, condition: RequestCondition): string => {
+    const base = condition.value === '' ? `${label} ${condition.key} 存在` : `${label} ${condition.key}=${condition.value}`;
+    const tags: string[] = [];
+    if (condition.type && condition.type !== 'string') tags.push(condition.type);
+    if (condition.required === false) tags.push('选填');
+    return tags.length ? `${base}（${tags.join('·')}）` : base;
+  };
   const parts: string[] = [];
-  for (const c of request.headers ?? []) parts.push(`Header ${c.key}=${c.value}`);
-  for (const c of request.query ?? []) parts.push(`Query ${c.key}=${c.value}`);
-  for (const c of request.body ?? []) parts.push(`Body ${c.key}=${c.value}`);
+  for (const c of request.headers ?? []) parts.push(format('Header', c));
+  for (const c of request.query ?? []) parts.push(format('Query', c));
+  for (const c of request.body ?? []) parts.push(format('Body', c));
   return parts.length ? parts : ['无条件（总是命中）'];
 }
 

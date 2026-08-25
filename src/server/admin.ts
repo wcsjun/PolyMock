@@ -4,6 +4,7 @@ import type { ServiceManagerLike } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
 import {
   DEFAULT_SERVICE_ID,
+  type ConditionType,
   type RequestCondition,
   type ResponseVariant,
   type Route,
@@ -17,6 +18,8 @@ export interface AdminOptions {
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
+const CONDITION_TYPES: readonly ConditionType[] = ['string', 'number', 'boolean', 'json'];
+
 /** 归一化一组条件行：key trim、过滤空 key 行；数组内对象不合法时报错 */
 function parseConditionList(raw: unknown, label: string): ParseResult<RequestCondition[]> {
   if (!Array.isArray(raw)) return { ok: false, error: `${label} 需为数组` };
@@ -27,8 +30,21 @@ function parseConditionList(raw: unknown, label: string): ParseResult<RequestCon
     if (typeof key !== 'string' || typeof value !== 'string') {
       return { ok: false, error: `${label} 中每项需包含字符串 key 与 value` };
     }
+    const type = (row as RequestCondition).type;
+    if (type !== undefined && !CONDITION_TYPES.includes(type)) {
+      return { ok: false, error: `${label} 中 type 需为 ${CONDITION_TYPES.join(' / ')}` };
+    }
+    const required = (row as RequestCondition).required;
+    if (required !== undefined && typeof required !== 'boolean') {
+      return { ok: false, error: `${label} 中 required 需为布尔值` };
+    }
     const trimmed = key.trim();
-    if (trimmed) list.push({ key: trimmed, value });
+    if (trimmed) {
+      const condition: RequestCondition = { key: trimmed, value };
+      if (type !== undefined && type !== 'string') condition.type = type;
+      if (required === false) condition.required = false;
+      list.push(condition);
+    }
   }
   return { ok: true, value: list };
 }

@@ -5,7 +5,7 @@ import { createAdminRouter } from './admin.js';
 import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
 import { DEFAULT_SERVICE_ID } from '../types.js';
-import type { RouteRequest, RouteResponse, Route } from '../types.js';
+import type { RequestCondition, RouteRequest, RouteResponse, Route } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
@@ -32,7 +32,70 @@ function actualText(value: unknown): string | null {
   return String(value);
 }
 
-/** 校验一组条件是否全部满足；返回第一条失败原因，全部通过返回 null */
+/** 深度相等比对（json 类型条件用） */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
+  }
+  const ak = Object.keys(a as Record<string, unknown>);
+  const bk = Object.keys(b as Record<string, unknown>);
+  return ak.length === bk.length && ak.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/** 归一化为布尔值；无法识别返回 undefined */
+function asBoolean(value: unknown): boolean | undefined {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return undefined;
+}
+
+/**
+ * 校验单条条件；返回失败原因，通过返回 null。
+ * - key 缺失：required 为 false（选填）时通过，否则失败；
+ * - 期望值为空串：仅要求 key 存在（存在性匹配）；
+ * - type 决定比对方式：string 字符串化比对（缺省）/ number 数值比对 / boolean 布尔比对 / json 深度相等。
+ */
+function checkCondition(cond: RequestCondition, actual: unknown): string | null {
+  if (actual === undefined) {
+    return cond.required === false ? null : `缺少（期望 ${cond.value}）`;
+  }
+  const expected = cond.value;
+  if (expected === '') return null;
+  const shown = actualText(actual) ?? 'undefined';
+  const mismatch = `期望 ${expected}，实际 ${shown}`;
+  switch (cond.type) {
+    case 'number': {
+      const actualNum = Number(actual);
+      const expectedNum = Number(expected);
+      if (!Number.isFinite(actualNum) || actualNum !== expectedNum) return mismatch;
+      return null;
+    }
+    case 'boolean': {
+      const expectedBool = asBoolean(expected);
+      if (expectedBool === undefined || asBoolean(actual) !== expectedBool) return mismatch;
+      return null;
+    }
+    case 'json': {
+      let expectedJson: unknown;
+      try {
+        expectedJson = JSON.parse(expected);
+      } catch {
+        return `期望值不是合法 JSON：${expected}`;
+      }
+      if (!deepEqual(actual, expectedJson)) return mismatch;
+      return null;
+    }
+    default: {
+      if (actualText(actual) !== expected) return mismatch;
+      return null;
+    }
+  }
+}
+
+/** 校验一组条件是否全部满足；返回第一条失败原因（带来源前缀），全部通过返回 null */
 function checkConditions(
   request: RouteRequest,
   headers: (key: string) => string | undefined,
@@ -40,23 +103,24 @@ function checkConditions(
   jsonBody: () => Record<string, unknown> | undefined,
 ): string | null {
   for (const cond of request.headers ?? []) {
-    const actual = headers(cond.key);
-    if (actual === undefined) return `缺少请求头 ${cond.key}=${cond.value}`;
-    if (actual !== cond.value) return `请求头 ${cond.key} 期望 ${cond.value}，实际 ${actual}`;
+    const reason = checkCondition(cond, headers(cond.key));
+    if (reason) return `请求头 ${cond.key} ${reason}`;
   }
   for (const cond of request.query ?? []) {
-    const actual = query(cond.key);
-    if (actual === undefined) return `缺少查询参数 ${cond.key}=${cond.value}`;
-    if (actual !== cond.value) return `查询参数 ${cond.key} 期望 ${cond.value}，实际 ${actual}`;
+    const reason = checkCondition(cond, query(cond.key));
+    if (reason) return `查询参数 ${cond.key} ${reason}`;
   }
   const bodyConditions = request.body ?? [];
   if (bodyConditions.length > 0) {
     const body = jsonBody();
-    if (!body) return '请求体缺失或非 JSON，无法匹配 body 条件';
+    if (!body) {
+      /* 全部为选填条件时，body 缺失视为字段缺失（逐条按选填语义通过） */
+      if (bodyConditions.every((c) => c.required === false)) return null;
+      return '请求体缺失或非 JSON，无法匹配 body 条件';
+    }
     for (const cond of bodyConditions) {
-      const text = actualText(lookupPath(body, cond.key));
-      if (text === null) return `请求体缺少字段 ${cond.key}（期望 ${cond.value}）`;
-      if (text !== cond.value) return `请求体字段 ${cond.key} 期望 ${cond.value}，实际 ${text}`;
+      const reason = checkCondition(cond, lookupPath(body, cond.key));
+      if (reason) return `请求体字段 ${cond.key} ${reason}`;
     }
   }
   return null;
