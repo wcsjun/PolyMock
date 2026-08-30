@@ -39,6 +39,8 @@ export interface Service {
   name: string;
   port: number;
   createdAt: number;
+  /** 代理转发目标（如 http://localhost:3000）：未命中 Mock 接口时转发到该地址；缺省不代理 */
+  proxyTarget?: string;
 }
 
 export interface Route {
@@ -55,6 +57,14 @@ export interface Route {
   requireMatch?: boolean;
   /** 响应变体，按数组顺序优先于默认响应匹配 */
   variants?: ResponseVariant[];
+  /** 禁用后不再参与 Mock 匹配（视为未注册，可走代理） */
+  disabled?: boolean;
+  /** 固定延迟毫秒数（0-60000 整数） */
+  delayMs?: number;
+  /** 随机抖动毫秒上限（0-60000 整数），实际延迟 = delayMs + rand(0..jitterMs) */
+  jitterMs?: number;
+  /** 故障注入概率百分比（0-100），命中时返回 500 */
+  failureRate?: number;
   createdAt: number;
 }
 
@@ -62,4 +72,30 @@ export interface PersistedState {
   version: 1;
   services: Service[];
   routes: Route[];
+  /** 全局设置（缺省兜底为空对象） */
+  settings?: { activeVariant?: string | null };
+}
+
+/** 单条 Mock 请求日志（id 使用 randomUUID） */
+export interface RequestLogEntry {
+  id: string;
+  ts: number;
+  serviceId: string;
+  method: string;
+  path: string;
+  /** 命中的路由与变体名（默认响应为 null；未命中任何路由为 null） */
+  matched: { routeId: string; variant: string | null } | null;
+  /** 是否走了代理转发 */
+  proxied?: boolean;
+  status: number;
+  /** 失败原因（requireMatch 未通过 / 代理请求失败） */
+  error?: string;
+  durationMs: number;
+  query?: Record<string, string>;
+  /** 请求体预览（JSON 序列化后截断） */
+  bodyPreview?: string;
+  /** 上游响应状态码（代理时） */
+  proxyStatus?: number;
+  /** 上游响应体预览（截断，代理时） */
+  proxyBody?: string;
 }

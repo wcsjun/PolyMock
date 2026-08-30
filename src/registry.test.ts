@@ -169,4 +169,76 @@ describe('RouteRegistry', () => {
     const replaced = restored.update(route.id, { variants: [variants[1]] });
     expect(replaced.ok && replaced.route.variants).toEqual([variants[1]]);
   });
+
+  it('find 跳过禁用路由，findAny 不过滤', () => {
+    const registry = new RouteRegistry();
+    const route = registry.add(SVC, 'GET', '/api/off', baseResponse);
+    expect(registry.update(route.id, { disabled: true }).ok).toBe(true);
+
+    expect(registry.find(SVC, 'GET', '/api/off')).toBeUndefined();
+    expect(registry.findAny(SVC, 'GET', '/api/off')).toBeDefined();
+    expect(registry.findAny(SVC, 'GET', '/api/off')?.disabled).toBe(true);
+
+    registry.update(route.id, { disabled: false });
+    expect(registry.find(SVC, 'GET', '/api/off')).toBeDefined();
+  });
+
+  it('update 支持延迟 / 抖动 / 故障注入等行为字段并持久化往返', () => {
+    const registry = new RouteRegistry();
+    const route = registry.add(SVC, 'GET', '/api/behavior', baseResponse, undefined, undefined, false, undefined, {
+      delayMs: 100,
+      jitterMs: 50,
+      failureRate: 25,
+    });
+    expect(route.delayMs).toBe(100);
+    expect(route.jitterMs).toBe(50);
+    expect(route.failureRate).toBe(25);
+
+    const updated = registry.update(route.id, { failureRate: 0, disabled: true });
+    expect(updated.ok && updated.route.failureRate).toBe(0);
+    expect(updated.ok && updated.route.disabled).toBe(true);
+    expect(updated.ok && updated.route.delayMs).toBe(100);
+
+    const restored = new RouteRegistry(registry.toJSON());
+    const back = restored.findAny(SVC, 'GET', '/api/behavior');
+    expect(back?.disabled).toBe(true);
+    expect(back?.delayMs).toBe(100);
+    expect(back?.jitterMs).toBe(50);
+    expect(back?.failureRate).toBe(0);
+  });
+
+  it('updateService 可合并名称与代理目标，toJSON 携带 proxyTarget', () => {
+    const registry = new RouteRegistry();
+    registry.addService('用户服务', 9001, 'user');
+    expect(registry.updateService('nope', { name: '不存在' })).toBe(false);
+
+    expect(registry.updateService('user', { proxyTarget: 'http://localhost:3000' })).toBe(true);
+    expect(registry.getService('user')?.proxyTarget).toBe('http://localhost:3000');
+    expect(registry.toJSON().services.find((s) => s.id === 'user')?.proxyTarget).toBe('http://localhost:3000');
+
+    expect(registry.updateService('user', { name: '改名服务', proxyTarget: undefined })).toBe(true);
+    expect(registry.getService('user')?.name).toBe('改名服务');
+    expect(registry.getService('user')?.proxyTarget).toBeUndefined();
+    expect(registry.toJSON().services.find((s) => s.id === 'user')?.proxyTarget).toBeUndefined();
+  });
+
+  it('settings 可设置、触发 change、持久化并从构造还原', () => {
+    const registry = new RouteRegistry();
+    expect(registry.getSettings()).toEqual({});
+
+    let changed = 0;
+    registry.on('change', () => {
+      changed += 1;
+    });
+    registry.setSettings({ activeVariant: '异常场景' });
+    expect(registry.getSettings().activeVariant).toBe('异常场景');
+    expect(changed).toBe(1);
+
+    const restored = new RouteRegistry(registry.toJSON());
+    expect(restored.getSettings()).toEqual({ activeVariant: '异常场景' });
+
+    restored.setSettings({ activeVariant: null });
+    expect(restored.getSettings().activeVariant).toBeNull();
+    expect(new RouteRegistry(restored.toJSON()).getSettings()).toEqual({ activeVariant: null });
+  });
 });
