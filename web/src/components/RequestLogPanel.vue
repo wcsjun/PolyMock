@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue';
-import { clearRequests, createRoute, fetchRequests } from '../api';
-import type { NotifyFn, RequestLogEntry } from '../types';
-import { routeCardStyle } from '../utils';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { clearRequests, createRoute, fetchRequests, getAdminToken } from '../api';
+import type { NotifyFn, RequestLogEntry, ServiceInfo } from '../types';
+import { buildCurl, copyText, routeCardStyle } from '../utils';
 
 const props = defineProps<{
   active: boolean;
   notify: NotifyFn;
+  /** 服务列表：用于服务过滤下拉与「复制 curl」取端口；缺省 []（App.vue 接线时传入） */
+  services?: ServiceInfo[];
 }>();
 
 const emit = defineEmits<{
@@ -14,15 +16,36 @@ const emit = defineEmits<{
 }>();
 
 const POLL_INTERVAL = 2000;
+/* 日志条数上限：与 fetchRequests 的 limit 一致 */
+const LOG_LIMIT = 200;
 
 const entries = ref<RequestLogEntry[]>([]);
 const expandedId = ref<string | null>(null);
 
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
+/* 服务列表（prop 缺省时为空数组） */
+const serviceList = computed(() => props.services ?? []);
+
+/* ---------- 过滤（纯客户端） ---------- */
+
+const filterStatus = ref<'all' | '2' | '4' | '5'>('all');
+const filterService = ref('all');
+const filterKeyword = ref('');
+
+const filteredEntries = computed(() => {
+  const keyword = filterKeyword.value.trim().toLowerCase();
+  return entries.value.filter((entry) => {
+    if (filterStatus.value !== 'all' && !String(entry.status).startsWith(filterStatus.value)) return false;
+    if (filterService.value !== 'all' && entry.serviceId !== filterService.value) return false;
+    if (keyword && !entry.path.toLowerCase().includes(keyword)) return false;
+    return true;
+  });
+});
+
 async function refresh() {
   try {
-    const data = await fetchRequests({ limit: 200 });
+    const data = await fetchRequests({ limit: LOG_LIMIT });
     /* 保证新→旧展示顺序 */
     entries.value = [...data.requests].sort((a, b) => b.ts - a.ts);
   } catch {
@@ -37,16 +60,68 @@ function stopPolling() {
   }
 }
 
-/* 激活时拉取并轮询，失活/卸载时停止；页面隐藏时跳过本轮 */
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => {
+    if (!document.hidden) void refresh();
+  }, POLL_INTERVAL);
+}
+
+/* ---------- SSE 实时推送（不可用时回落轮询） ---------- */
+
+/* true = SSE 已连接（实时），false = 轮询模式 */
+const liveMode = ref(false);
+let eventSource: EventSource | undefined;
+
+/** 尝试建立 SSE 连接；onopen 标记「实时」并停轮询，onerror 关闭并回落 2s 轮询 */
+function connectEvents() {
+  if (typeof EventSource === 'undefined') return;
+  try {
+    const params = new URLSearchParams({ limit: String(LOG_LIMIT) });
+    const token = getAdminToken();
+    if (token) params.set('token', token);
+    const es = new EventSource(`/__polymock/events?${params.toString()}`);
+    es.addEventListener('log', (event) => {
+      try {
+        const entry = JSON.parse((event as MessageEvent).data) as RequestLogEntry;
+        /* 按 id 去重后前插（事件即最新），超出上限裁剪 */
+        if (!entry?.id || entries.value.some((item) => item.id === entry.id)) return;
+        entries.value = [entry, ...entries.value].slice(0, LOG_LIMIT);
+      } catch {
+        /* 忽略无法解析的事件帧 */
+      }
+    });
+    es.onopen = () => {
+      liveMode.value = true;
+      stopPolling();
+    };
+    es.onerror = () => {
+      /* 端点不存在 / 断连：关闭连接并回落到轮询 */
+      closeEvents();
+      liveMode.value = false;
+      startPolling();
+    };
+    eventSource = es;
+  } catch {
+    /* 构造失败保持轮询模式 */
+  }
+}
+
+function closeEvents() {
+  eventSource?.close();
+  eventSource = undefined;
+}
+
+/* 激活时拉取一次并优先尝试 SSE（失败自动回落轮询），失活/卸载时停止；页面隐藏时跳过轮询 */
 watch(
   () => props.active,
   (active) => {
     stopPolling();
+    closeEvents();
     if (active) {
       void refresh();
-      pollTimer = setInterval(() => {
-        if (!document.hidden) void refresh();
-      }, POLL_INTERVAL);
+      startPolling();
+      connectEvents();
     } else {
       expandedId.value = null;
     }
@@ -54,7 +129,10 @@ watch(
   { immediate: true },
 );
 
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  stopPolling();
+  closeEvents();
+});
 
 /* ---------- 展示辅助 ---------- */
 
@@ -76,6 +154,43 @@ function queryEntries(entry: RequestLogEntry): Array<[string, string]> {
 
 function toggleExpand(id: string) {
   expandedId.value = expandedId.value === id ? null : id;
+}
+
+/* ---------- 重放 / 复制 curl ---------- */
+
+const replayingId = ref<string | null>(null);
+
+/** 仅 GET 且非代理穿透的记录可重放 */
+function canReplay(entry: RequestLogEntry): boolean {
+  return entry.method === 'GET' && !entry.proxied;
+}
+
+/** 重放：按记录的路径与 query 重新发送 GET，提示状态码与耗时后刷新列表 */
+async function replay(entry: RequestLogEntry) {
+  if (!canReplay(entry) || replayingId.value) return;
+  replayingId.value = entry.id;
+  const started = performance.now();
+  try {
+    const query = new URLSearchParams(entry.query ?? {}).toString();
+    const res = await fetch(`${location.origin}${entry.path}${query ? `?${query}` : ''}`);
+    const cost = Math.round(performance.now() - started);
+    props.notify(`重放 ${entry.path}：${res.status}（${cost} ms）`, res.ok ? 'ok' : 'err');
+    await refresh();
+  } catch (err) {
+    props.notify(`重放失败：${(err as Error).message}`, 'err');
+  } finally {
+    replayingId.value = null;
+  }
+}
+
+/** 复制该条日志的 curl：端口优先取所属服务配置，取不到回落当前页面端口 */
+async function copyCurl(entry: RequestLogEntry) {
+  const fallbackPort = Number(location.port) || 80;
+  const port = serviceList.value.find((svc) => svc.id === entry.serviceId)?.port ?? fallbackPort;
+  const query = new URLSearchParams(entry.query ?? {}).toString();
+  const url = `http://${location.hostname}:${port}${entry.path}${query ? `?${query}` : ''}`;
+  const ok = await copyText(buildCurl(url, entry.method));
+  props.notify(ok ? '已复制 curl' : '复制失败，请手动复制', ok ? 'ok' : 'err');
 }
 
 /* ---------- 清空 / 保存为接口 ---------- */
@@ -131,7 +246,25 @@ async function saveAsRoute(entry: RequestLogEntry) {
       </div>
     </header>
 
-    <div v-if="entries.length" class="log-list">
+    <!-- 过滤行：状态 / 服务 / 路径关键字（纯客户端过滤），右侧为实时模式标记 -->
+    <div class="log-filters">
+      <select v-model="filterStatus" class="filter-select" aria-label="按状态过滤">
+        <option value="all">全部状态</option>
+        <option value="2">2xx</option>
+        <option value="4">4xx</option>
+        <option value="5">5xx</option>
+      </select>
+      <select v-model="filterService" class="filter-select" aria-label="按服务过滤">
+        <option value="all">全部服务</option>
+        <option v-for="svc in serviceList" :key="svc.id" :value="svc.id">{{ svc.name }}</option>
+      </select>
+      <input v-model="filterKeyword" class="filter-keyword" type="text" placeholder="按路径过滤，如 /api/users" spellcheck="false">
+      <span class="live-badge" :class="{ on: liveMode }" :title="liveMode ? 'SSE 实时推送已连接' : '按 2s 轮询刷新'">
+        {{ liveMode ? '实时' : '轮询' }}
+      </span>
+    </div>
+
+    <div v-if="filteredEntries.length" class="log-list">
       <div class="log-head">
         <span>时间</span>
         <span>方法</span>
@@ -141,7 +274,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
         <span>命中</span>
         <span>耗时</span>
       </div>
-      <template v-for="(entry, i) in entries" :key="entry.id">
+      <template v-for="(entry, i) in filteredEntries" :key="entry.id">
         <button
           type="button"
           class="log-row"
@@ -159,6 +292,21 @@ async function saveAsRoute(entry: RequestLogEntry) {
           <span class="log-dur">{{ entry.durationMs }} ms</span>
         </button>
         <div v-if="expandedId === entry.id" class="log-detail">
+          <div class="detail-head-row">
+            <span class="detail-label">操作</span>
+            <div class="detail-ops">
+              <button
+                v-if="canReplay(entry)"
+                type="button"
+                class="mini-btn"
+                :disabled="replayingId === entry.id"
+                @click="replay(entry)"
+              >
+                {{ replayingId === entry.id ? '重放中…' : '重放' }}
+              </button>
+              <button type="button" class="mini-btn" @click="copyCurl(entry)">复制 curl</button>
+            </div>
+          </div>
           <div v-if="queryEntries(entry).length" class="detail-block">
             <span class="detail-label">Query</span>
             <div class="detail-chips">
@@ -186,7 +334,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
 
     <div v-else class="log-empty">
       <div class="empty-glyph">≣</div>
-      <p class="empty-title">暂无请求记录，命中 Mock 的请求会显示在这里</p>
+      <p class="empty-title">{{ entries.length ? '没有符合过滤条件的记录' : '暂无请求记录，命中 Mock 的请求会显示在这里' }}</p>
     </div>
   </section>
 </template>
@@ -201,6 +349,54 @@ async function saveAsRoute(entry: RequestLogEntry) {
 .mini-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ---------- 过滤行（状态 / 服务 / 路径关键字 + 实时标记） ---------- */
+.log-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.filter-select {
+  flex: none;
+  width: auto;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.filter-keyword {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.live-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.live-badge.on {
+  color: var(--accent-strong);
+  border-color: rgba(14, 159, 93, 0.35);
+  background: var(--accent-dim);
+}
+
+/* 详情操作按钮行（重放 / 复制 curl） */
+.detail-ops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ---------- 日志表格（grid 布局） ---------- */

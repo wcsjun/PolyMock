@@ -1273,3 +1273,9 @@ body.sidebar-resizing iframe { pointer-events: none; }
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- 序列响应编辑器（RouteForm 高级选项） ---------- */
+/* 非法 JSON 标红（与全局 textarea.invalid 语义一致，单独声明便于序列编辑器样式自治） */
+textarea.sequence-editor.invalid {
+  border-color: var(--danger);
+}

@@ -2,7 +2,15 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { createRoute, updateRoute } from '../api';
 import type { ConditionRow, NotifyFn, Route, RoutePayload, ServiceInfo } from '../types';
-import { buildRouteRequest, bodyRowsToJsonValue, formatBody, jsonValueToBodyRows, splitRouteRequest } from '../utils';
+import {
+  buildRouteRequest,
+  bodyRowsToJsonValue,
+  formatBody,
+  jsonValueToBodyRows,
+  parseSequenceDraft,
+  sequenceToDraftText,
+  splitRouteRequest,
+} from '../utils';
 import ConditionTable from './ConditionTable.vue';
 
 const props = defineProps<{
@@ -46,6 +54,15 @@ const BODY_COND_PLACEHOLDER = `{
 /* 响应 body 模板说明（含 {{ }} 字面量，须经 :title 绑定常量，避免被模板插值解析） */
 const TEMPLATE_HINT_TITLE =
   'body 字符串支持：{{query.参数名}} {{header.头名}} {{body.点路径}} {{$id}} 自增 {{$now}} 当前时间 {{$int(1,99)}} 随机整数';
+
+/* 路径参数提示（含 {{ }} 字面量，同上须经常量绑定渲染） */
+const PATH_PARAM_HINT = '支持 :参数 段，如 /api/users/:id，响应模板可用 {{params.id}}';
+
+/* 序列响应编辑器的占位示例（JSON 数组，每步 status + body） */
+const SEQUENCE_PLACEHOLDER = `[
+  { "status": 200, "body": { "mode": "first" } },
+  { "status": 500, "body": { "error": "boom" } }
+]`;
 
 type SceneRows = Record<CondTab, ConditionRow[]>;
 
@@ -97,6 +114,14 @@ const jitterMs = ref<number | ''>('');
 const failureRate = ref<number | ''>('');
 /* 停用开关仅编辑态展示，随 payload.disabled 提交 */
 const disabledFlag = ref(false);
+
+/* 序列响应：开关 + 草稿文本（JSON 数组），非法时标红；提交时解析为 [{status, body-string}] */
+const sequenceOn = ref(false);
+const sequenceText = ref('');
+const sequenceInvalid = ref(false);
+
+/* 有状态 CRUD 开关，随 payload.crud 提交 */
+const crudFlag = ref(false);
 
 const activeIndex = computed(() => {
   const idx = scenes.value.findIndex((s) => s.localId === activeId.value);
@@ -196,6 +221,12 @@ watch(
       failureRate.value = route.failureRate ?? '';
       disabledFlag.value = route.disabled === true;
 
+      /* 序列响应 / CRUD 回填：sequence 的 body 统一转为展示友好的 JSON 形态 */
+      sequenceOn.value = (route.sequence?.length ?? 0) > 0;
+      sequenceText.value = sequenceToDraftText(route.sequence);
+      sequenceInvalid.value = false;
+      crudFlag.value = route.crud === true;
+
       scenes.value = [
         def,
         ...(route.variants ?? []).map((v) => {
@@ -226,6 +257,10 @@ function resetForm() {
   jitterMs.value = '';
   failureRate.value = '';
   disabledFlag.value = false;
+  sequenceOn.value = false;
+  sequenceText.value = '';
+  sequenceInvalid.value = false;
+  crudFlag.value = false;
   scenes.value = [defaultScene()];
   activeId.value = DEFAULT_SCENE_ID;
   serviceId.value = props.services.some((s) => s.id === keepService)
@@ -294,6 +329,16 @@ function onBodyInput(scene: SceneDraft) {
   if (scene.invalid) validateBodyText(scene);
 }
 
+/** 序列草稿失焦即时校验：空文本视为未填写不标红；非法只标红（提交时才提示具体错误） */
+function validateSequenceText() {
+  sequenceInvalid.value = sequenceText.value.trim() ? !parseSequenceDraft(sequenceText.value).ok : false;
+}
+
+/** 序列输入过程中仅在标红状态下复检，便于即时消除错误 */
+function onSequenceInput() {
+  if (sequenceInvalid.value) validateSequenceText();
+}
+
 /** 格式化当前场景的 body 文本；非法时报错并标红 */
 function formatBodyText() {
   const scene = activeScene.value;
@@ -358,6 +403,19 @@ async function submit() {
   const failureVal = parseAdvancedValue(failureRate.value, 100, '故障率 %');
   if (delayVal === null || jitterVal === null || failureVal === null) return;
 
+  /* 序列响应：开启时必须解析为合法数组（body 字符串原样提交，由后端解析） */
+  let sequencePayload: Array<{ status: number; body: string }> | undefined;
+  if (sequenceOn.value) {
+    const parsed = parseSequenceDraft(sequenceText.value);
+    if (!parsed.ok) {
+      sequenceInvalid.value = true;
+      props.notify(parsed.error, 'err');
+      return;
+    }
+    sequenceInvalid.value = false;
+    sequencePayload = parsed.value;
+  }
+
   submitting.value = true;
   try {
     /* 编辑态始终携带三个字段以便清除；新建态仅在有意义时携带 */
@@ -389,6 +447,14 @@ async function submit() {
       if (jitterMs.value === '') delete payload.jitterMs;
       if (failureRate.value === '') delete payload.failureRate;
       delete payload.disabled;
+    }
+    /* 序列/CRUD：编辑态始终携带（序列为数组或 []）以便清除；新建态仅在有值时携带 */
+    if (editing) {
+      payload.sequence = sequencePayload ?? [];
+      payload.crud = crudFlag.value;
+    } else {
+      if (sequencePayload) payload.sequence = sequencePayload;
+      if (crudFlag.value) payload.crud = true;
     }
     if (!editing || routeName) payload.name = routeName;
 
@@ -449,6 +515,7 @@ async function submit() {
             autofocus
           >
         </div>
+        <p class="hint path-hint" v-text="PATH_PARAM_HINT"></p>
       </div>
 
       <div class="scene-editor">
@@ -608,6 +675,41 @@ async function submit() {
             <span class="switch-title">停用此接口（返回 404）</span>
           </span>
           <input id="f-disabled" v-model="disabledFlag" type="checkbox" class="switch-input">
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
+
+        <!-- 序列响应：按命中次序循环返回（独占一行） -->
+        <div class="advanced-sequence">
+          <label class="switch-row" for="f-sequence">
+            <span class="switch-text">
+              <span class="switch-title">序列响应</span>
+              <span class="hint">按命中次序依次返回并循环，优先于场景变体与默认响应</span>
+            </span>
+            <input id="f-sequence" v-model="sequenceOn" type="checkbox" class="switch-input">
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+          <template v-if="sequenceOn">
+            <textarea
+              v-model="sequenceText"
+              class="sequence-editor"
+              rows="5"
+              :placeholder="SEQUENCE_PLACEHOLDER"
+              spellcheck="false"
+              :class="{ invalid: sequenceInvalid }"
+              @blur="validateSequenceText"
+              @input="onSequenceInput"
+            ></textarea>
+            <p v-show="sequenceInvalid" class="field-error">序列响应不是合法的 JSON 数组（每步需含数字 status 与 body）</p>
+          </template>
+        </div>
+
+        <!-- 有状态 CRUD：同一集合需分别注册集合/条目路由 -->
+        <label class="switch-row" for="f-crud">
+          <span class="switch-text">
+            <span class="switch-title">有状态 CRUD</span>
+            <span class="hint">集合路由（无参数段）：GET=列表、POST=创建；条目路由（含 :id）：GET/PUT/DELETE 存取。需为同一集合分别注册路由</span>
+          </span>
+          <input id="f-crud" v-model="crudFlag" type="checkbox" class="switch-input">
           <span class="switch-ui" aria-hidden="true"></span>
         </label>
       </div>
@@ -798,4 +900,23 @@ async function submit() {
 }
 
 .switch-field { margin-top: 2px; }
+
+/* ---------- 高级选项扩展：路径参数提示 / 序列响应 ---------- */
+
+.path-hint {
+  margin-top: 6px;
+}
+
+/* 序列响应块独占一行：开关 + 草稿编辑器 */
+.advanced-sequence {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.sequence-editor {
+  min-height: 96px;
+  font-size: 12px;
+  line-height: 1.55;
+}
 </style>

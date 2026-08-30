@@ -27,6 +27,10 @@ export interface Route {
   jitterMs?: number;
   /** 故障注入百分比（0-100），命中概率返回 500 */
   failureRate?: number;
+  /** 序列响应：按命中次序循环返回（优先于场景集/变体/默认响应，requireMatch 门槛之后） */
+  sequence?: Array<{ status: number; body: unknown }>;
+  /** 有状态 CRUD：路径需含 :id 参数，服务内存维护资源集合（重启清空） */
+  crud?: boolean;
   createdAt: number;
 }
 
@@ -105,6 +109,8 @@ export interface RoutePayload {
   delayMs?: number;
   jitterMs?: number;
   failureRate?: number;
+  sequence?: Array<{ status: number; body: string }>;
+  crud?: boolean;
 }
 
 /** 请求日志条目（运行时态，不持久化）；matched 为 null 表示未命中（404 或代理穿透） */

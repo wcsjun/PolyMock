@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { NotifyFn, Route } from '../types';
-import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, routeCardStyle, routeUrl } from '../utils';
+import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, routeCardStyle, routeUrl, toJavaEntity } from '../utils';
 
 const props = defineProps<{
   route: Route;
@@ -21,15 +21,16 @@ const cardStyle = computed(() => routeCardStyle(props.route.method, props.index)
 const bodyPreview = computed(() => formatBody(props.route.response.body));
 const variants = computed(() => props.route.variants ?? []);
 
-/* ---------- 复制菜单：地址 / curl / fetch ---------- */
+/* ---------- 复制菜单：地址 / curl / fetch / Java 实体 ---------- */
 
-type CopyKind = 'url' | 'curl' | 'fetch';
+type CopyKind = 'url' | 'curl' | 'fetch' | 'java';
 
 /** 各菜单项复制成功后的提示文案 */
 const COPY_SUCCESS: Record<CopyKind, string> = {
   url: '已复制地址',
   curl: '已复制 curl',
   fetch: '已复制 fetch 代码',
+  java: '已复制 Java 实体',
 };
 
 const copyMenuOpen = ref(false);
@@ -39,13 +40,21 @@ function toggleCopyMenu() {
   copyMenuOpen.value = !copyMenuOpen.value;
 }
 
+/** Java 实体类名：优先接口名，为空时取路径最后一段（toJavaEntity 内部再做 PascalCase 清理） */
+function javaEntityClassName(): string {
+  const name = props.route.name?.trim();
+  if (name) return name;
+  return props.route.path.split('/').filter(Boolean).pop() ?? 'Entity';
+}
+
 /** 按菜单项复制对应片段并提示 */
 async function copySnippet(kind: CopyKind) {
   copyMenuOpen.value = false;
   const url = routeUrl(props.port, props.route.path);
   const text = kind === 'url' ? url
     : kind === 'curl' ? buildCurl(url, props.route.method)
-    : buildFetchSnippet(url, props.route.method);
+    : kind === 'fetch' ? buildFetchSnippet(url, props.route.method)
+    : toJavaEntity(javaEntityClassName(), props.route.response.body);
   const ok = await copyText(text);
   props.notify(ok ? COPY_SUCCESS[kind] : '复制失败，请手动复制', ok ? 'ok' : 'err');
 }
@@ -89,7 +98,7 @@ function openInBrowser() {
         <button
           type="button"
           class="route-copy"
-          title="复制地址 / curl / fetch"
+          title="复制地址 / curl / fetch / Java 实体"
           aria-haspopup="menu"
           :aria-expanded="copyMenuOpen"
           :aria-label="`复制 ${route.method} ${route.path} 的地址或代码片段`"
@@ -101,6 +110,7 @@ function openInBrowser() {
           <button type="button" role="menuitem" @click="copySnippet('url')">复制地址</button>
           <button type="button" role="menuitem" @click="copySnippet('curl')">复制 curl</button>
           <button type="button" role="menuitem" @click="copySnippet('fetch')">复制 fetch</button>
+          <button type="button" role="menuitem" @click="copySnippet('java')">复制 Java 实体</button>
         </div>
       </span>
       <button

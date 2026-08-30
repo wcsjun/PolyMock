@@ -209,3 +209,204 @@ export function routeCardStyle(method: string, index: number): CardStyle {
     animationDelay: `${Math.min(index * 40, 240)}ms`,
   };
 }
+
+/* ---------- 序列响应草稿（RouteForm 编辑 ⇄ 提交） ---------- */
+
+/** 序列响应单步（提交态）：body 统一为字符串原样提交，由后端解析模板/JSON */
+export interface SequenceStep {
+  status: number;
+  body: string;
+}
+
+export type SequenceParseResult =
+  | { ok: true; value: SequenceStep[] }
+  | { ok: false; error: string };
+
+/**
+ * 解析「序列响应」草稿文本：要求 JSON 数组，每项含数字 status 与 body
+ * - body 为字符串时原样保留（后端会解析）；其余类型 JSON.stringify 转为字符串
+ * - 空文本 / 非法 JSON / 非数组 / 空序列 / 步骤缺字段 / status 非 100-599 整数均返回 ok:false
+ */
+export function parseSequenceDraft(text: string): SequenceParseResult {
+  const raw = text.trim();
+  if (!raw) return { ok: false, error: '序列响应内容为空，请填写 JSON 数组' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: '序列响应不是合法的 JSON' };
+  }
+  if (!Array.isArray(parsed)) return { ok: false, error: '序列响应必须是 JSON 数组' };
+  if (!parsed.length) return { ok: false, error: '序列响应至少需要一步' };
+  const value: SequenceStep[] = [];
+  for (const [index, item] of parsed.entries()) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      return { ok: false, error: `第 ${index + 1} 步必须是对象` };
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.status !== 'number' || !Number.isInteger(record.status) || record.status < 100 || record.status > 599) {
+      return { ok: false, error: `第 ${index + 1} 步的 status 必须是 100-599 的整数` };
+    }
+    if (!('body' in record)) return { ok: false, error: `第 ${index + 1} 步缺少 body` };
+    value.push({ status: record.status, body: typeof record.body === 'string' ? record.body : JSON.stringify(record.body) });
+  }
+  return { ok: true, value };
+}
+
+/** 尝试把字符串解析为 JSON 值，失败（或空串）返回原字符串 */
+function tryParseJson(text: string): unknown {
+  const raw = text.trim();
+  if (!raw) return text;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return text;
+  }
+}
+
+/** 序列响应回填：把存储态（body 为任意值）转为展示友好的草稿文本；body 为 JSON 字符串时解析为对象便于编辑 */
+export function sequenceToDraftText(sequence?: Array<{ status: number; body: unknown }>): string {
+  const steps = (sequence ?? []).map((step) => ({
+    status: step.status,
+    body: typeof step.body === 'string' ? tryParseJson(step.body) : step.body,
+  }));
+  return JSON.stringify(steps, null, 2);
+}
+
+/* ---------- Java 实体生成（卡片复制菜单用） ---------- */
+
+/** ISO date-time 形态的字符串（注释里提示可映射为 LocalDateTime） */
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+/** 把任意字符串转为合法 Java 类名：按非字母数字切段后逐段首字母大写拼接；数字开头补下划线，空结果回落 Entity */
+function pascalClassName(raw: string): string {
+  const name = String(raw)
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+  if (!name) return 'Entity';
+  return /^[0-9]/.test(name) ? `_${name}` : name;
+}
+
+/** 字段名保持原样，仅把非 Java 标识符字符替换为下划线；数字开头补下划线前缀 */
+function javaFieldName(raw: string): string {
+  const name = String(raw).replace(/[^A-Za-z0-9_$]/g, '_');
+  if (!name) return '_';
+  return /^[0-9]/.test(name) ? `_${name}` : name;
+}
+
+/** JSON 标量 → Java 类型：整数值 Integer、小数 Double、布尔 Boolean、字符串 String、null Object */
+function javaScalarType(value: unknown): string {
+  if (typeof value === 'number') return Number.isInteger(value) ? 'Integer' : 'Double';
+  if (typeof value === 'boolean') return 'Boolean';
+  if (typeof value === 'string') return 'String';
+  return 'Object';
+}
+
+/** 标量字段的示例值注释；ISO 时间字符串附加 LocalDateTime 提示 */
+function scalarComment(value: unknown): string {
+  let comment = `示例值: ${JSON.stringify(value) ?? 'null'}`;
+  if (typeof value === 'string' && ISO_DATETIME_RE.test(value)) {
+    comment += '（ISO 时间字符串，可映射为 LocalDateTime）';
+  }
+  return comment;
+}
+
+/** 生成中的 Java 字段描述 */
+interface JavaFieldDraft {
+  name: string;
+  type: string;
+  comment: string;
+  /** 嵌套静态类（对象字段 / 对象数组的对象元素） */
+  nested?: JavaClassDraft;
+}
+
+/** 生成中的 Java 类描述 */
+interface JavaClassDraft {
+  name: string;
+  fields: JavaFieldDraft[];
+}
+
+/** 单个字段推导：对象→嵌套类、数组→List（取首元素）、空对象→Map、标量按类型映射 */
+function buildJavaField(key: string, value: unknown): JavaFieldDraft {
+  const name = javaFieldName(key);
+  /* 嵌套对象 → public static class（字段名 PascalCase + Info 后缀），递归展开 */
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (!entries.length) {
+      return { name, type: 'java.util.Map<String, Object>', comment: '结构: 空对象，键值对映射' };
+    }
+    const nested: JavaClassDraft = { name: `${pascalClassName(key)}Info`, fields: [] };
+    for (const [childKey, childValue] of entries) {
+      nested.fields.push(buildJavaField(childKey, childValue));
+    }
+    return { name, type: nested.name, comment: `结构: 嵌套对象，见 ${nested.name}`, nested };
+  }
+  /* 数组取首元素推导元素类型；元素为对象时同样生成嵌套类 */
+  if (Array.isArray(value)) {
+    const first = value[0];
+    if (first !== null && typeof first === 'object' && !Array.isArray(first)) {
+      const nested: JavaClassDraft = { name: `${pascalClassName(key)}Info`, fields: [] };
+      for (const [childKey, childValue] of Object.entries(first as Record<string, unknown>)) {
+        nested.fields.push(buildJavaField(childKey, childValue));
+      }
+      return { name, type: `java.util.List<${nested.name}>`, comment: `结构: 数组，元素对象见 ${nested.name}`, nested };
+    }
+    if (first === undefined) {
+      return { name, type: 'java.util.List<Object>', comment: '结构: 空数组' };
+    }
+    const elemType = javaScalarType(first);
+    return { name, type: `java.util.List<${elemType}>`, comment: `结构: 数组，元素类型 ${elemType}` };
+  }
+  return { name, type: javaScalarType(value), comment: scalarComment(value) };
+}
+
+/** 渲染类体：字段块在前（之间空行），嵌套静态类在后；返回不带类声明外壳的行 */
+function renderClassBody(draft: JavaClassDraft, depth: number): string[] {
+  const indent = '    '.repeat(depth);
+  const blocks: string[][] = [];
+  for (const field of draft.fields) {
+    blocks.push([`${indent}/** ${field.comment} */`, `${indent}private ${field.type} ${field.name};`]);
+  }
+  for (const field of draft.fields) {
+    if (!field.nested) continue;
+    blocks.push([
+      `${indent}@Data`,
+      `${indent}public static class ${field.nested.name} {`,
+      ...renderClassBody(field.nested, depth + 1),
+      `${indent}}`,
+    ]);
+  }
+  const lines: string[] = [];
+  for (const block of blocks) {
+    if (lines.length) lines.push('');
+    lines.push(...block);
+  }
+  return lines;
+}
+
+/**
+ * 根据接口响应 JSON 生成 Java 实体类代码（Lombok @Data 风格，嵌套对象生成静态内部类，数组取首元素推导 List<T>）
+ * - 类名 PascalCase 化（非法字符剔除）；字段名保持原样，非法标识符字符转下划线
+ * - 类型映射：string→String（ISO date-time 注释提示可用 LocalDateTime）、整数→Integer、小数→Double、
+ *   boolean→Boolean、null→Object、对象→嵌套 public static class（PascalCase + Info 后缀，递归）、
+ *   数组→java.util.List<元素类型>（元素为对象时嵌套类）、空对象→java.util.Map<String, Object>
+ * - body 为 JSON 字符串时先解析；根值非对象（数组/标量）时包装为单个 data 字段；无字段时生成空类
+ * - 生成完整文件内容：package 声明省略，直接 import lombok.Data + 类
+ */
+export function toJavaEntity(className: string, body: unknown): string {
+  let root: unknown = body;
+  if (typeof root === 'string') root = tryParseJson(root);
+  const cls: JavaClassDraft = { name: pascalClassName(className), fields: [] };
+  if (root !== null && typeof root === 'object' && !Array.isArray(root)) {
+    for (const [key, value] of Object.entries(root as Record<string, unknown>)) {
+      cls.fields.push(buildJavaField(key, value));
+    }
+  } else {
+    /* 根值不是对象（数组/标量/null）：包装为 data 字段 */
+    cls.fields.push(buildJavaField('data', root));
+  }
+  const lines = ['import lombok.Data;', '', `@Data`, `public class ${cls.name} {`, ...renderClassBody(cls, 1), '}'];
+  return `${lines.join('\n')}\n`;
+}

@@ -379,7 +379,7 @@ function onSidebarRzDown(event: PointerEvent) {
       <!-- 请求日志 -->
       <section id="view-logs" class="view" :hidden="view !== 'logs'">
         <div class="layout">
-          <RequestLogPanel :active="view === 'logs'" :notify="showToast" @changed="loadAll" />
+          <RequestLogPanel :active="view === 'logs'" :notify="showToast" :services="services" @changed="loadAll" />
         </div>
       </section>
     </main>

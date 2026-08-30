@@ -1,8 +1,29 @@
 import type { MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo } from './types';
 
+/** 管理令牌（可选）：后端设置 POLYMOCK_ADMIN_TOKEN 后，所有管理请求需携带该令牌 */
+export function getAdminToken(): string {
+  try {
+    return localStorage.getItem('polymock:token') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setAdminToken(token: string): void {
+  try {
+    if (token) localStorage.setItem('polymock:token', token);
+    else localStorage.removeItem('polymock:token');
+  } catch {
+    /* 忽略存储失败 */
+  }
+}
+
 /** 对应原 app.js 的 api()：非 2xx 时抛出后端 error 字段信息 */
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(path, options);
+  const headers = new Headers(options?.headers);
+  const token = getAdminToken();
+  if (token) headers.set('x-polymock-token', token);
+  const res = await fetch(path, { ...options, headers });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
   return data as T;
