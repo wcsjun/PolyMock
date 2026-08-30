@@ -13,11 +13,20 @@ export function loadState(filePath: string): PersistedState {
   }
   try {
     const data = JSON.parse(raw);
-    return {
+    const state: PersistedState = {
       version: 1,
       services: Array.isArray(data?.services) ? data.services : [],
       routes: Array.isArray(data?.routes) ? data.routes : [],
     };
+    /* settings 缺省兜底：仅在接受对象且 activeVariant 为字符串或 null 时保留 */
+    const rawSettings = data?.settings;
+    if (rawSettings !== null && typeof rawSettings === 'object') {
+      const activeVariant = (rawSettings as { activeVariant?: unknown }).activeVariant;
+      if (typeof activeVariant === 'string' || activeVariant === null) {
+        state.settings = { activeVariant };
+      }
+    }
+    return state;
   } catch (err) {
     console.error(`[PolyMock] 配置文件解析失败（${filePath}），按空配置启动:`, err);
     return EMPTY;

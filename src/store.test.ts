@@ -74,6 +74,27 @@ describe('loadState', () => {
     expect(state.services).toEqual([]);
     expect(state.routes).toEqual([]);
   });
+
+  it('settings 合法时读回，非法或缺失时兜底省略', () => {
+    const file = path.join(makeTmpDir(), 'config.json');
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ version: 1, services: [], routes: [], settings: { activeVariant: '异常场景' } }),
+    );
+    expect(loadState(file).settings).toEqual({ activeVariant: '异常场景' });
+
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ version: 1, services: [], routes: [], settings: { activeVariant: 42 } }),
+    );
+    expect(loadState(file).settings).toBeUndefined();
+
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ version: 1, services: [], routes: [], settings: 'oops' }),
+    );
+    expect(loadState(file).settings).toBeUndefined();
+  });
 });
 
 describe('saveState', () => {

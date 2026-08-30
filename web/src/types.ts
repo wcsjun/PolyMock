@@ -1,7 +1,5 @@
 /** 与后端 src/types.ts 及 /__polymock 管理 API 返回结构保持一致的前端类型 */
 
-export type ViewName = 'routes' | 'embed';
-
 export type ToastKind = 'ok' | 'err' | 'warn';
 
 export type NotifyFn = (message: string, kind?: ToastKind) => void;
@@ -21,6 +19,14 @@ export interface Route {
   requireMatch?: boolean;
   /** 响应变体，按数组顺序优先于默认响应匹配 */
   variants?: ResponseVariant[];
+  /** 停用后不参与匹配，请求按未注册处理（404） */
+  disabled?: boolean;
+  /** 固定延迟毫秒数（0-60000），命中后延迟返回 */
+  delayMs?: number;
+  /** 随机抖动毫秒数（0-60000），实际延迟 = delayMs + rand(0, jitterMs) */
+  jitterMs?: number;
+  /** 故障注入百分比（0-100），命中概率返回 500 */
+  failureRate?: number;
   createdAt: number;
 }
 
@@ -77,6 +83,8 @@ export interface ServiceInfo {
   isDefault: boolean;
   running: boolean;
   count: number;
+  /** 代理穿透目标：未命中请求转发到该地址 */
+  proxyTarget?: string;
 }
 
 /** 新增/编辑接口时的请求体（body 为原始文本，由后端做 JSON 解析） */
@@ -93,4 +101,39 @@ export interface RoutePayload {
     match?: RouteRequest;
     response: { status: number; body: string };
   }>;
+  disabled?: boolean;
+  delayMs?: number;
+  jitterMs?: number;
+  failureRate?: number;
 }
+
+/** 请求日志条目（运行时态，不持久化）；matched 为 null 表示未命中（404 或代理穿透） */
+export interface RequestLogEntry {
+  id: string;
+  ts: number;
+  serviceId: string;
+  method: string;
+  path: string;
+  matched: { routeId: string; variant: string | null } | null;
+  /** 走代理穿透返回 */
+  proxied?: boolean;
+  status: number;
+  /** 未命中原因（400 准入失败等） */
+  error?: string;
+  durationMs: number;
+  query?: Record<string, string>;
+  /** 请求 body 摘要（截断） */
+  bodyPreview?: string;
+  /** 代理响应状态码 */
+  proxyStatus?: number;
+  /** 代理响应原文（截断），用于「保存为接口」 */
+  proxyBody?: string;
+}
+
+/** 全局设置（持久化到 polymock.config.json） */
+export interface MockSettings {
+  /** 全局场景集：设置后所有拥有同名变体的接口强制命中该变体（绕过其条件） */
+  activeVariant?: string | null;
+}
+
+export type ViewName = 'routes' | 'embed' | 'logs';

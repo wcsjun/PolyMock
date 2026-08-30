@@ -1,10 +1,12 @@
 import type { Express } from 'express';
+import { createServer, type Server } from 'node:http';
 import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { ServiceManager } from './manager.js';
+import { RequestLogStore } from './request-log.js';
 import { RouteRegistry } from '../registry.js';
-import { DEFAULT_SERVICE_ID } from '../types.js';
+import { DEFAULT_SERVICE_ID, type RequestLogEntry } from '../types.js';
 import { getFreePort, listen, type TestServer } from './test-utils.js';
 
 // public/ 为 vite 构建产物（见 .gitignore），未执行 pnpm build 的全新克隆中不存在，此时跳过静态资源用例
@@ -16,14 +18,16 @@ describe('createApp 集成测试', () => {
   let app: Express;
   let server: TestServer;
   let freePort: number;
+  let logs: RequestLogStore;
   let createdServiceId: string | undefined;
 
   beforeEach(async () => {
     registry = new RouteRegistry();
     registry.addService('默认服务', 8080, DEFAULT_SERVICE_ID);
     registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', { status: 200, body: { message: 'hi' } });
-    manager = new ServiceManager(registry);
-    app = createApp(registry, manager, { mainPort: 8080 });
+    logs = new RequestLogStore();
+    manager = new ServiceManager(registry, { logs });
+    app = createApp(registry, manager, { mainPort: 8080, logs });
     server = await listen(app);
     freePort = await getFreePort();
   });
@@ -507,5 +511,276 @@ describe('createApp 集成测试', () => {
       body: JSON.stringify({ name: '坏开关', method: 'GET', path: '/api/bad-switch', requireMatch: 'yes' }),
     });
     expect(badRequireMatch.status).toBe(400);
+  });
+
+  // ---- C1-C8：禁用 / 延迟 / 故障注入 / 模板 / 请求日志 / 场景集 / 代理 ----
+
+  async function putRoute(id: string, payload: Record<string, unknown>): Promise<{ status: number; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number } }> {
+    const res = await fetch(`${server.baseUrl}/__polymock/routes/${id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as { ok: boolean; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number } };
+    return { status: res.status, route: body.route };
+  }
+
+  async function latestLog(): Promise<RequestLogEntry> {
+    const res = await fetch(`${server.baseUrl}/__polymock/requests`);
+    const body = (await res.json()) as { ok: boolean; requests: RequestLogEntry[] };
+    expect(body.ok).toBe(true);
+    expect(body.requests.length).toBeGreaterThan(0);
+    return body.requests[0];
+  }
+
+  it('禁用接口后按未注册处理（404），恢复后可访问；PUT 支持只含 disabled 的 patch', async () => {
+    const routeId = await registerRoute({
+      name: '可禁用接口',
+      method: 'GET',
+      path: '/api/off',
+      response: { status: 200, body: { on: true } },
+    });
+
+    const disabled = await putRoute(routeId, { disabled: true });
+    expect(disabled.status).toBe(200);
+    expect(disabled.route?.disabled).toBe(true);
+
+    const gone = await fetch(`${server.baseUrl}/api/off`);
+    expect(gone.status).toBe(404);
+
+    const reEnabled = await putRoute(routeId, { disabled: false });
+    expect(reEnabled.status).toBe(200);
+    const back = await fetch(`${server.baseUrl}/api/off`);
+    expect(back.status).toBe(200);
+    expect(await back.json()).toEqual({ on: true });
+  });
+
+  it('failureRate=100 时注入 500 故障，error 含"模拟故障"', async () => {
+    await registerRoute({
+      name: '必故障接口',
+      method: 'GET',
+      path: '/api/failure',
+      response: { status: 200, body: { fine: true } },
+      failureRate: 100,
+    });
+    const res = await fetch(`${server.baseUrl}/api/failure`);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toContain('模拟故障');
+  });
+
+  it('delayMs 延迟生效（实测耗时 >= 70ms）', async () => {
+    await registerRoute({
+      name: '慢接口',
+      method: 'GET',
+      path: '/api/slow',
+      response: { status: 200, body: { slow: true } },
+      delayMs: 80,
+    });
+    const start = Date.now();
+    const res = await fetch(`${server.baseUrl}/api/slow`);
+    const elapsed = Date.now() - start;
+    expect(res.status).toBe(200);
+    expect(elapsed).toBeGreaterThanOrEqual(70);
+  });
+
+  it('模板占位符在响应中渲染（query 与 body）', async () => {
+    await registerRoute({
+      name: '模板接口',
+      method: 'POST',
+      path: '/api/template',
+      response: { status: 200, body: { token: '{{query.token}}', echo: '{{body.name}}', seq: '{{$id}}' } },
+    });
+    const res = await fetch(`${server.baseUrl}/api/template?token=xyz`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '小明' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ token: 'xyz', echo: '小明', seq: '1' });
+  });
+
+  it('请求日志记录命中路由与变体，DELETE 清空', async () => {
+    const routeId = await registerRoute({
+      name: '日志接口',
+      method: 'GET',
+      path: '/api/logged',
+      variants: [{ name: '管理员视角', match: { headers: [{ key: 'X-Role', value: 'admin' }] }, response: { body: { role: 'admin' } } }],
+      response: { status: 200, body: { role: 'default' } },
+    });
+
+    const hit = await fetch(`${server.baseUrl}/api/logged?trace=1`, { headers: { 'X-Role': 'admin' } });
+    expect(hit.status).toBe(200);
+
+    const entry = await latestLog();
+    expect(entry.matched).toEqual({ routeId, variant: '管理员视角' });
+    expect(entry.status).toBe(200);
+    expect(entry.method).toBe('GET');
+    expect(entry.path).toBe('/api/logged');
+    expect(entry.serviceId).toBe(DEFAULT_SERVICE_ID);
+    expect(entry.query).toEqual({ trace: '1' });
+    expect(entry.durationMs).toBeGreaterThanOrEqual(0);
+
+    const cleared = await fetch(`${server.baseUrl}/__polymock/requests`, { method: 'DELETE' });
+    expect(((await cleared.json()) as { ok: boolean }).ok).toBe(true);
+
+    const after = await fetch(`${server.baseUrl}/__polymock/requests`);
+    expect(((await after.json()) as { requests: unknown[] }).requests).toEqual([]);
+  });
+
+  it('全局场景集：activeVariant 强制命中变体响应，置空后恢复默认', async () => {
+    const routeId = await registerRoute({
+      name: '场景接口',
+      method: 'GET',
+      path: '/api/scenario',
+      variants: [
+        { name: '异常场景', match: { headers: [{ key: 'X-Never', value: 'impossible' }] }, response: { body: { scenario: 'error' } } },
+      ],
+      response: { status: 200, body: { scenario: 'default' } },
+    });
+
+    const normal = await fetch(`${server.baseUrl}/api/scenario`);
+    expect(await normal.json()).toEqual({ scenario: 'default' });
+
+    const put = await fetch(`${server.baseUrl}/__polymock/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ activeVariant: '异常场景' }),
+    });
+    expect(put.status).toBe(200);
+    expect(((await put.json()) as { settings: { activeVariant: string } }).settings.activeVariant).toBe('异常场景');
+
+    const forced = await fetch(`${server.baseUrl}/api/scenario`);
+    expect(await forced.json()).toEqual({ scenario: 'error' });
+    expect((await latestLog()).matched).toEqual({ routeId, variant: '异常场景' });
+
+    const reset = await fetch(`${server.baseUrl}/__polymock/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ activeVariant: null }),
+    });
+    expect(reset.status).toBe(200);
+    const restored = await fetch(`${server.baseUrl}/api/scenario`);
+    expect(await restored.json()).toEqual({ scenario: 'default' });
+  });
+
+  it('代理：未注册路径转发上游（JSON 与文本），日志 proxied=true', async () => {
+    const upstreamPort = await getFreePort();
+    const upstream = createServer((req, res) => {
+      if (req.url === '/text') {
+        res.setHeader('content-type', 'text/plain; charset=utf-8');
+        res.end('hello upstream');
+        return;
+      }
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ upstream: true, url: req.url }));
+    });
+    await new Promise<void>((resolve) => upstream.listen(upstreamPort, '127.0.0.1', () => resolve()));
+
+    try {
+      const put = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target: `http://127.0.0.1:${upstreamPort}` }),
+      });
+      expect(put.status).toBe(200);
+      expect(((await put.json()) as { service: { proxyTarget?: string } }).service.proxyTarget).toBe(`http://127.0.0.1:${upstreamPort}`);
+
+      const jsonRes = await fetch(`${server.baseUrl}/from-upstream?a=1`);
+      expect(jsonRes.status).toBe(200);
+      expect(await jsonRes.json()).toEqual({ upstream: true, url: '/from-upstream?a=1' });
+
+      const textRes = await fetch(`${server.baseUrl}/text`);
+      expect(textRes.status).toBe(200);
+      expect(textRes.headers.get('content-type')).toContain('text/plain');
+      await expect(textRes.text()).resolves.toBe('hello upstream');
+
+      const entry = await latestLog();
+      expect(entry.matched).toBeNull();
+      expect(entry.proxied).toBe(true);
+      expect(entry.proxyStatus).toBe(200);
+      expect(entry.status).toBe(200);
+      expect(entry.proxyBody).toContain('upstream');
+    } finally {
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it('代理：非法 URL 返回 400，服务不存在返回 404，target=null 清除', async () => {
+    const badUrl = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'not-a-url' }),
+    });
+    expect(badUrl.status).toBe(400);
+
+    const badScheme = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'ftp://example.com' }),
+    });
+    expect(badScheme.status).toBe(400);
+
+    const missing = await fetch(`${server.baseUrl}/__polymock/services/nope/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'http://localhost:3000' }),
+    });
+    expect(missing.status).toBe(404);
+
+    const set = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'http://localhost:3000' }),
+    });
+    expect(set.status).toBe(200);
+
+    const clear = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: null }),
+    });
+    expect(clear.status).toBe(200);
+    expect(((await clear.json()) as { service: { proxyTarget?: string } }).service.proxyTarget).toBeUndefined();
+  });
+
+  it('管理 API：行为字段校验与传递', async () => {
+    const badDelay = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏延迟', method: 'GET', path: '/api/bad-delay', delayMs: 70000 }),
+    });
+    expect(badDelay.status).toBe(400);
+    expect(((await badDelay.json()) as { error: string }).error).toContain('delayMs');
+
+    const badRate = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏概率', method: 'GET', path: '/api/bad-rate', failureRate: 101 }),
+    });
+    expect(badRate.status).toBe(400);
+
+    const badDisabled = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏禁用', method: 'GET', path: '/api/bad-disabled', disabled: 'yes' }),
+    });
+    expect(badDisabled.status).toBe(400);
+
+    const created = await registerRoute({
+      name: '带行为字段',
+      method: 'GET',
+      path: '/api/behaved',
+      response: { status: 200, body: {} },
+      delayMs: 10,
+      jitterMs: 20,
+      failureRate: 5,
+    });
+    const list = await fetch(`${server.baseUrl}/__polymock/routes`);
+    const route = ((await list.json()) as { routes: Array<{ id: string; delayMs?: number; jitterMs?: number; failureRate?: number }> }).routes.find((r) => r.id === created);
+    expect(route).toMatchObject({ delayMs: 10, jitterMs: 20, failureRate: 5 });
+
+    const patched = await putRoute(created, { delayMs: 0 });
+    expect(patched.status).toBe(200);
+    expect(patched.route?.delayMs).toBe(0);
   });
 });

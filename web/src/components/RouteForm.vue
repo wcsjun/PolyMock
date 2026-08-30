@@ -43,6 +43,10 @@ const BODY_COND_PLACEHOLDER = `{
   }
 }`;
 
+/* 响应 body 模板说明（含 {{ }} 字面量，须经 :title 绑定常量，避免被模板插值解析） */
+const TEMPLATE_HINT_TITLE =
+  'body 字符串支持：{{query.参数名}} {{header.头名}} {{body.点路径}} {{$id}} 自增 {{$now}} 当前时间 {{$int(1,99)}} 随机整数';
+
 type SceneRows = Record<CondTab, ConditionRow[]>;
 
 function emptyRows(): SceneRows {
@@ -83,6 +87,16 @@ const scenes = ref<SceneDraft[]>([defaultScene()]);
 const activeId = ref<number>(DEFAULT_SCENE_ID);
 /* 默认响应的准入开关：开启后所有请求需满足默认场景条件，否则返回 400 */
 const requireMatch = ref(false);
+
+/* ---------- 高级选项：延迟 / 抖动 / 故障注入 / 停用 ---------- */
+
+const advancedOpen = ref(false);
+/* 空字符串表示未设置（模式同 ServicePanel 的 sPort） */
+const delayMs = ref<number | ''>('');
+const jitterMs = ref<number | ''>('');
+const failureRate = ref<number | ''>('');
+/* 停用开关仅编辑态展示，随 payload.disabled 提交 */
+const disabledFlag = ref(false);
 
 const activeIndex = computed(() => {
   const idx = scenes.value.findIndex((s) => s.localId === activeId.value);
@@ -176,6 +190,12 @@ watch(
       ({ query: def.rows.query, headers: def.rows.headers, body: def.rows.body } = splitRouteRequest(route.request));
       requireMatch.value = route.requireMatch === true;
 
+      /* 高级选项回填（disabled/延迟/抖动/故障率） */
+      delayMs.value = route.delayMs ?? '';
+      jitterMs.value = route.jitterMs ?? '';
+      failureRate.value = route.failureRate ?? '';
+      disabledFlag.value = route.disabled === true;
+
       scenes.value = [
         def,
         ...(route.variants ?? []).map((v) => {
@@ -202,6 +222,10 @@ function resetForm() {
   method.value = 'GET';
   path.value = '';
   requireMatch.value = false;
+  delayMs.value = '';
+  jitterMs.value = '';
+  failureRate.value = '';
+  disabledFlag.value = false;
   scenes.value = [defaultScene()];
   activeId.value = DEFAULT_SCENE_ID;
   serviceId.value = props.services.some((s) => s.id === keepService)
@@ -284,6 +308,16 @@ function formatBodyText() {
   }
 }
 
+/** 解析高级选项数值：要求 0-max 整数，空输入按 0（未设置）处理；非法时提示并返回 null */
+function parseAdvancedValue(raw: number | '', max: number, label: string): number | null {
+  const num = Number(raw);
+  if (!Number.isInteger(num) || num < 0 || num > max) {
+    props.notify(`${label} 必须是 0-${max} 的整数`, 'err');
+    return null;
+  }
+  return num;
+}
+
 async function submit() {
   const editing = props.editing;
   const routeName = name.value.trim();
@@ -318,6 +352,12 @@ async function submit() {
     if (!ensureJson(scene.bodyText, `场景「${sceneName}」的 body`, () => { scene.invalid = true; })) return;
   }
 
+  /* 高级选项数值校验：延迟/抖动 0-60000，故障率 0-100 */
+  const delayVal = parseAdvancedValue(delayMs.value, 60000, '延迟 ms');
+  const jitterVal = parseAdvancedValue(jitterMs.value, 60000, '抖动 ms');
+  const failureVal = parseAdvancedValue(failureRate.value, 100, '故障率 %');
+  if (delayVal === null || jitterVal === null || failureVal === null) return;
+
   submitting.value = true;
   try {
     /* 编辑态始终携带三个字段以便清除；新建态仅在有意义时携带 */
@@ -335,11 +375,20 @@ async function submit() {
       request: editing ? (request ?? {}) : request,
       requireMatch: requireMatch.value,
       variants,
+      delayMs: delayVal,
+      jitterMs: jitterVal,
+      failureRate: failureVal,
+      disabled: disabledFlag.value,
     };
     if (!editing) {
       if (!payload.request) delete payload.request;
       if (!payload.requireMatch) delete payload.requireMatch;
       if (!variants.length) delete payload.variants;
+      /* 新建态：高级选项仅在有值时携带；disabled 仅编辑态可携带 */
+      if (delayMs.value === '') delete payload.delayMs;
+      if (jitterMs.value === '') delete payload.jitterMs;
+      if (failureRate.value === '') delete payload.failureRate;
+      delete payload.disabled;
     }
     if (!editing || routeName) payload.name = routeName;
 
@@ -510,6 +559,7 @@ async function submit() {
               <label>返回响应</label>
               <span class="label-row-ops">
                 <span v-if="activeIsDefault" class="hint">无场景命中时返回</span>
+                <span class="hint" :title="TEMPLATE_HINT_TITLE">模板可用</span>
                 <button type="button" class="mini-btn" title="格式化 JSON" @click="formatBodyText">格式化</button>
               </span>
             </div>
@@ -526,6 +576,40 @@ async function submit() {
             <p v-show="activeScene.invalid" class="field-error">body 不是合法的 JSON</p>
           </div>
         </div>
+      </div>
+
+      <!-- 高级选项：延迟 / 抖动 / 故障注入 / 停用（编辑态） -->
+      <button
+        type="button"
+        class="advanced-toggle"
+        :aria-expanded="advancedOpen"
+        @click="advancedOpen = !advancedOpen"
+      >
+        ⚙ 高级选项 {{ advancedOpen ? '▾' : '▸' }}
+      </button>
+      <div v-if="advancedOpen" class="advanced-grid">
+        <div class="field">
+          <label for="f-delay-ms">延迟 ms</label>
+          <input id="f-delay-ms" v-model.number="delayMs" type="number" min="0" max="60000" placeholder="0">
+          <p class="hint">固定延迟</p>
+        </div>
+        <div class="field">
+          <label for="f-jitter-ms">抖动 ms</label>
+          <input id="f-jitter-ms" v-model.number="jitterMs" type="number" min="0" max="60000" placeholder="0">
+          <p class="hint">随机抖动上限</p>
+        </div>
+        <div class="field">
+          <label for="f-failure-rate">故障率 %</label>
+          <input id="f-failure-rate" v-model.number="failureRate" type="number" min="0" max="100" step="1" placeholder="0">
+          <p class="hint">按概率返回 500</p>
+        </div>
+        <label v-if="editing" class="switch-row" for="f-disabled">
+          <span class="switch-text">
+            <span class="switch-title">停用此接口（返回 404）</span>
+          </span>
+          <input id="f-disabled" v-model="disabledFlag" type="checkbox" class="switch-input">
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
       </div>
 
       <div class="form-actions">

@@ -1,5 +1,6 @@
 import { createApp } from './server/app.js';
 import { ServiceManager } from './server/manager.js';
+import { RequestLogStore } from './server/request-log.js';
 import { RouteRegistry } from './registry.js';
 import { loadState, saveState } from './store.js';
 import { DEFAULT_SERVICE_ID } from './types.js';
@@ -20,17 +21,19 @@ if (defaultService) {
   registry.addService('默认服务', port, DEFAULT_SERVICE_ID);
 }
 
-if (!registry.find(DEFAULT_SERVICE_ID, 'GET', '/api/hello')) {
+/* findAny：默认路由即使被禁用也不重新播种 */
+if (!registry.findAny(DEFAULT_SERVICE_ID, 'GET', '/api/hello')) {
   registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', {
     status: 200,
     body: { message: 'Hello from PolyMock', hint: '在控制台新增你的接口' },
   });
 }
 
-const manager = new ServiceManager(registry);
+const logs = new RequestLogStore();
+const manager = new ServiceManager(registry, { logs });
 void manager.startAll(registry.listServices().filter((s) => s.id !== DEFAULT_SERVICE_ID));
 
-const app = createApp(registry, manager, { mainPort: port });
+const app = createApp(registry, manager, { mainPort: port, logs });
 app.listen(port, () => {
   console.log('PolyMock 已启动');
   console.log(`  Web UI   -> http://localhost:${port}`);

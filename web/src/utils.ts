@@ -163,6 +163,19 @@ export function routeUrl(port: number, path: string): string {
   return `http://${location.hostname}:${port}${path}`;
 }
 
+/* ---------- 代码片段生成（卡片复制菜单用） ---------- */
+
+/** 生成 curl 片段；GET/HEAD 省略 -X（curl 默认即 GET） */
+export function buildCurl(url: string, method: string): string {
+  return method === 'GET' || method === 'HEAD' ? `curl '${url}'` : `curl -X ${method} '${url}'`;
+}
+
+/** 生成 fetch 代码片段；GET/HEAD 省略 options（fetch 默认即 GET） */
+export function buildFetchSnippet(url: string, method: string): string {
+  if (method === 'GET' || method === 'HEAD') return `fetch('${url}')`;
+  return `fetch('${url}', {\n  method: '${method}',\n})`;
+}
+
 /** 复制文本到剪贴板；非安全上下文回落 execCommand */
 export async function copyText(text: string): Promise<boolean> {
   try {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { createService } from '../api';
+import { computed, reactive, ref, watch } from 'vue';
+import { createService, setProxy } from '../api';
 import type { NotifyFn, Route, ServiceInfo } from '../types';
 import RouteCard from './RouteCard.vue';
 
@@ -16,7 +16,7 @@ const emit = defineEmits<{
   remove: [service: ServiceInfo];
   edit: [route: Route];
   'remove-route': [route: Route];
-  test: [route: Route];
+  'toggle-disable': [route: Route];
   changed: [];
 }>();
 
@@ -58,6 +58,32 @@ async function submitService() {
     sName.value = '';
     sPort.value = '';
     props.notify(`已新增服务「${name}」(:${port})`);
+    emit('changed');
+  } catch (err) {
+    props.notify((err as Error).message, 'err');
+  }
+}
+
+/* ---------- 服务代理穿透配置 ---------- */
+
+const proxyDrafts = reactive<Record<string, string>>({});
+
+/* 服务首次出现时用 proxyTarget 回填草稿；轮询刷新不覆盖正在编辑的内容 */
+watch(
+  () => props.services,
+  (list) => {
+    for (const svc of list) {
+      if (!(svc.id in proxyDrafts)) proxyDrafts[svc.id] = svc.proxyTarget ?? '';
+    }
+  },
+  { immediate: true },
+);
+
+async function saveProxy(svc: ServiceInfo) {
+  const target = (proxyDrafts[svc.id] ?? '').trim() || null;
+  try {
+    await setProxy(svc.id, target);
+    props.notify(target ? `已为「${svc.name}」设置代理穿透 → ${target}` : `已关闭「${svc.name}」的代理穿透`);
     emit('changed');
   } catch (err) {
     props.notify((err as Error).message, 'err');
@@ -125,8 +151,19 @@ async function submitService() {
             :notify="notify"
             @edit="emit('edit', $event)"
             @remove="emit('remove-route', $event)"
-            @test="emit('test', $event)"
+            @toggle-disable="emit('toggle-disable', $event)"
           />
+        </div>
+        <div v-if="expanded.has(svc.id)" class="service-proxy">
+          <input
+            v-model="proxyDrafts[svc.id]"
+            name="proxy"
+            type="text"
+            placeholder="代理穿透目标，如 http://localhost:3000（留空关闭）"
+            spellcheck="false"
+            @keydown.enter.prevent="saveProxy(svc)"
+          >
+          <button type="button" class="proxy-save" title="保存代理穿透配置" @click="saveProxy(svc)">保存</button>
         </div>
       </div>
     </div>
@@ -138,3 +175,39 @@ async function submitService() {
     </form>
   </section>
 </template>
+
+<style scoped>
+/* 展开卡片内的代理穿透配置行，视觉对齐 .service-form */
+.service-proxy {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.service-proxy input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.proxy-save {
+  flex: none;
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.proxy-save:hover {
+  color: var(--accent-strong);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+</style>

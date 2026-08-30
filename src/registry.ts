@@ -9,9 +9,13 @@ import type {
   Service,
 } from './types.js';
 
+/** 路由响应行为字段（禁用 / 延迟 / 抖动 / 故障注入），可通过 add 的 behavior 与 update 的 patch 设置 */
+export type RouteBehavior = Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>;
+
 export class RouteRegistry extends EventEmitter {
   private readonly services = new Map<string, Service>();
   private readonly routes = new Map<string, Route>();
+  private settings: { activeVariant?: string | null } = {};
 
   constructor(state?: PersistedState) {
     super();
@@ -20,6 +24,9 @@ export class RouteRegistry extends EventEmitter {
     }
     for (const route of state?.routes ?? []) {
       this.routes.set(RouteRegistry.key(route.serviceId, route.method, route.path), route);
+    }
+    if (state?.settings) {
+      this.settings = { ...state.settings };
     }
   }
 
@@ -51,6 +58,15 @@ export class RouteRegistry extends EventEmitter {
     return removed;
   }
 
+  /** 更新服务分组（名称 / 代理目标）；服务不存在返回 false */
+  updateService(id: string, patch: Partial<Pick<Service, 'name' | 'proxyTarget'>>): boolean {
+    const current = this.services.get(id);
+    if (!current) return false;
+    this.services.set(id, { ...current, ...patch });
+    this.emit('change');
+    return true;
+  }
+
   listServices(): Service[] {
     return [...this.services.values()].sort((a, b) => a.createdAt - b.createdAt);
   }
@@ -70,6 +86,7 @@ export class RouteRegistry extends EventEmitter {
     request?: RouteRequest,
     requireMatch?: boolean,
     variants?: ResponseVariant[],
+    behavior?: RouteBehavior,
   ): Route {
     const route: Route = {
       id: randomUUID(),
@@ -83,6 +100,7 @@ export class RouteRegistry extends EventEmitter {
       requireMatch,
       variants,
       createdAt: Date.now(),
+      ...behavior,
     };
     this.routes.set(RouteRegistry.key(serviceId, route.method, path), route);
     this.emit('change');
@@ -97,7 +115,7 @@ export class RouteRegistry extends EventEmitter {
 
   update(
     id: string,
-    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants'>>,
+    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>>,
   ): { ok: true; route: Route } | { ok: false; error: 'not-found' } | { ok: false; error: 'conflict'; conflict: Route } {
     const current = [...this.routes.values()].find((r) => r.id === id);
     if (!current) return { ok: false, error: 'not-found' };
@@ -121,7 +139,14 @@ export class RouteRegistry extends EventEmitter {
     return { ok: true, route: next };
   }
 
+  /** 精确查找（跳过已禁用的路由，禁用视为未注册） */
   find(serviceId: string, method: string, path: string): Route | undefined {
+    const route = this.routes.get(RouteRegistry.key(serviceId, method, path));
+    return route?.disabled ? undefined : route;
+  }
+
+  /** 不过滤禁用状态的查找（默认路由播种 / 管理场景用，避免禁用后被重新播种） */
+  findAny(serviceId: string, method: string, path: string): Route | undefined {
     return this.routes.get(RouteRegistry.key(serviceId, method, path));
   }
 
@@ -132,7 +157,18 @@ export class RouteRegistry extends EventEmitter {
     return routes.sort((a, b) => a.createdAt - b.createdAt);
   }
 
+  // ---------- 全局设置 ----------
+
+  getSettings(): { activeVariant?: string | null } {
+    return { ...this.settings };
+  }
+
+  setSettings(patch: { activeVariant?: string | null }): void {
+    this.settings = { ...this.settings, ...patch };
+    this.emit('change');
+  }
+
   toJSON(): PersistedState {
-    return { version: 1, services: this.listServices(), routes: this.list() };
+    return { version: 1, services: this.listServices(), routes: this.list(), settings: { ...this.settings } };
   }
 }

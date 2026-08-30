@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import type { ServiceManagerLike } from './manager.js';
+import type { RequestLogStore } from './request-log.js';
 import type { RouteRegistry } from '../registry.js';
 import {
   DEFAULT_SERVICE_ID,
@@ -10,11 +11,18 @@ import {
   type Route,
   type RouteRequest,
   type RouteResponse,
+  type Service,
 } from '../types.js';
 
 export interface AdminOptions {
   mainPort: number;
+  /** 请求日志存储（/requests 端点读取与清空）；缺省时返回空列表 */
+  logs?: RequestLogStore;
 }
+
+/** 请求日志查询的缺省与上限条数 */
+const DEFAULT_REQUESTS_LIMIT = 100;
+const MAX_REQUESTS_LIMIT = 500;
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -108,6 +116,47 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
   return { ok: true, value: list };
 }
 
+/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate）；未提供的字段不出现在结果中 */
+function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>> {
+  if (raw === null || typeof raw !== 'object') {
+    return { ok: false, error: '请求体需为 JSON 对象' };
+  }
+  const source = raw as Record<string, unknown>;
+  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'> = {};
+  if (source.disabled !== undefined) {
+    if (typeof source.disabled !== 'boolean') {
+      return { ok: false, error: 'disabled 需为布尔值' };
+    }
+    result.disabled = source.disabled;
+  }
+  for (const field of ['delayMs', 'jitterMs'] as const) {
+    const value = source[field];
+    if (value !== undefined) {
+      if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 60000) {
+        return { ok: false, error: `${field} 需为 0-60000 的整数` };
+      }
+      result[field] = value as number;
+    }
+  }
+  if (source.failureRate !== undefined) {
+    if (typeof source.failureRate !== 'number' || !Number.isFinite(source.failureRate) || source.failureRate < 0 || source.failureRate > 100) {
+      return { ok: false, error: 'failureRate 需为 0-100 的数字' };
+    }
+    result.failureRate = source.failureRate;
+  }
+  return { ok: true, value: result };
+}
+
+/** 管理接口返回的服务对象：附加 isDefault / running / 接口数量 */
+function describeService(registry: RouteRegistry, manager: ServiceManagerLike, service: Service) {
+  return {
+    ...service,
+    isDefault: service.id === DEFAULT_SERVICE_ID,
+    running: service.id === DEFAULT_SERVICE_ID ? true : manager.isRunning(service.id),
+    count: registry.list(service.id).length,
+  };
+}
+
 export function createAdminRouter(registry: RouteRegistry, manager: ServiceManagerLike, options: AdminOptions): express.Router {
   const router = express.Router();
 
@@ -115,12 +164,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   router.get('/services', (_req, res) => {
     res.json({
       ok: true,
-      services: registry.listServices().map((service) => ({
-        ...service,
-        isDefault: service.id === DEFAULT_SERVICE_ID,
-        running: service.id === DEFAULT_SERVICE_ID ? true : manager.isRunning(service.id),
-        count: registry.list(service.id).length,
-      })),
+      services: registry.listServices().map((service) => describeService(registry, manager, service)),
     });
   });
 
@@ -171,6 +215,72 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     res.json({ ok: registry.removeService(serviceId) });
   });
 
+  // ---- 服务代理转发 ----
+  router.put('/services/:id/proxy', (req, res) => {
+    const serviceId = req.params.id;
+    if (!registry.getService(serviceId)) {
+      res.status(404).json({ ok: false, error: '服务不存在' });
+      return;
+    }
+    const target = (req.body as { target?: unknown } | undefined)?.target;
+    if (typeof target !== 'string' && target !== null) {
+      res.status(400).json({ ok: false, error: 'target 需为字符串或 null' });
+      return;
+    }
+    /* null / 空串 = 清除代理；否则必须为合法 http(s) URL */
+    let proxyTarget: string | undefined;
+    if (typeof target === 'string' && target !== '') {
+      let parsed: URL;
+      try {
+        parsed = new URL(target);
+      } catch {
+        res.status(400).json({ ok: false, error: 'target 需为合法的 http(s) URL' });
+        return;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        res.status(400).json({ ok: false, error: 'target 需为合法的 http(s) URL' });
+        return;
+      }
+      proxyTarget = target;
+    }
+    if (!registry.updateService(serviceId, { proxyTarget })) {
+      res.status(404).json({ ok: false, error: '服务不存在' });
+      return;
+    }
+    const service = registry.getService(serviceId) as Service;
+    res.json({ ok: true, service: describeService(registry, manager, service) });
+  });
+
+  // ---- 请求日志 ----
+  router.get('/requests', (req, res) => {
+    const serviceId = typeof req.query.serviceId === 'string' && req.query.serviceId ? req.query.serviceId : undefined;
+    const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : NaN;
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_REQUESTS_LIMIT) : DEFAULT_REQUESTS_LIMIT;
+    res.json({ ok: true, requests: options.logs ? options.logs.list({ serviceId, limit }) : [] });
+  });
+
+  router.delete('/requests', (_req, res) => {
+    options.logs?.clear();
+    res.json({ ok: true });
+  });
+
+  // ---- 全局设置（场景集）----
+  router.get('/settings', (_req, res) => {
+    res.json({ ok: true, settings: registry.getSettings() });
+  });
+
+  router.put('/settings', (req, res) => {
+    const { activeVariant } = (req.body ?? {}) as { activeVariant?: unknown };
+    if (typeof activeVariant !== 'string' && activeVariant !== null) {
+      res.status(400).json({ ok: false, error: 'activeVariant 需为字符串或 null' });
+      return;
+    }
+    /* 空串视为清除场景集 */
+    const trimmed = typeof activeVariant === 'string' ? activeVariant.trim() : null;
+    registry.setSettings({ activeVariant: trimmed ? trimmed : null });
+    res.json({ ok: true, settings: registry.getSettings() });
+  });
+
   // ---- 管理 API（接口注册）----
   router.get('/routes', (req, res) => {
     const serviceId = typeof req.query.serviceId === 'string' ? req.query.serviceId : undefined;
@@ -194,12 +304,18 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: '服务分组不存在' });
       return;
     }
-    if (registry.find(sid, method, routePath)) {
+    /* 用 findAny 做冲突检查：已禁用的路由仍占用 method + path，不允许静默覆盖 */
+    if (registry.findAny(sid, method, routePath)) {
       res.status(409).json({ ok: false, error: `接口 ${method.toUpperCase()} ${routePath} 已存在` });
       return;
     }
     if (requireMatch !== undefined && typeof requireMatch !== 'boolean') {
       res.status(400).json({ ok: false, error: 'requireMatch 需为布尔值' });
+      return;
+    }
+    const behaviorParsed = parseBehaviorFields(req.body);
+    if (!behaviorParsed.ok) {
+      res.status(400).json({ ok: false, error: behaviorParsed.error });
       return;
     }
 
@@ -233,7 +349,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       status: response?.status ?? 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
       body: bodyParsed.value,
-    }, routeName, routeRequest, requireMatch, routeVariants);
+    }, routeName, routeRequest, requireMatch, routeVariants, behaviorParsed.value);
     res.status(201).json({ ok: true, route });
   });
 
@@ -250,7 +366,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
 
   router.put('/routes/:id', (req, res) => {
     const { serviceId, name, method, path: routePath, response, request, requireMatch, variants } = req.body ?? {};
-    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants'>> = {};
+    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>> = {};
 
     if (serviceId !== undefined) {
       if (typeof serviceId !== 'string' || !serviceId) {
@@ -319,9 +435,16 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       }
       patch.variants = parsed.value;
     }
+    /* 行为字段（disabled / delayMs / jitterMs / failureRate）可单独作为 patch */
+    const behaviorParsed = parseBehaviorFields(req.body);
+    if (!behaviorParsed.ok) {
+      res.status(400).json({ ok: false, error: behaviorParsed.error });
+      return;
+    }
+    Object.assign(patch, behaviorParsed.value);
 
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants）' });
+      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants / disabled / delayMs / jitterMs / failureRate）' });
       return;
     }
 

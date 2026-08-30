@@ -1174,3 +1174,102 @@ body.sidebar-resizing iframe { pointer-events: none; }
 
 /* ---------- 响应变体编辑器 ---------- */
 .block-hint { margin-bottom: 8px; }
+
+/* ---------- 卡片复制菜单（地址 / curl / fetch） ---------- */
+.copy-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 140px;
+  z-index: 5;
+  display: grid;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.copy-menu button {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.copy-menu button:hover {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+/* ---------- 卡片徽标扩展与停用态 ---------- */
+/* 已停用徽标（灰红）：带 .route-meta 提升优先级，覆盖卡片 scoped 内 .route-chip 的基础配色 */
+.route-meta .route-chip.off {
+  color: var(--danger);
+  border-color: rgba(207, 34, 46, 0.35);
+  background: rgba(207, 34, 46, 0.06);
+}
+
+/* 有「已停用」徽标时整卡淡灰 */
+.route-card.disabled-card {
+  opacity: 0.6;
+}
+
+/* 卡片 meta 行的停用开关：抵消 switch-field 的负边距，并靠右放置 */
+.route-disable {
+  margin-top: 0;
+  margin-left: auto;
+}
+
+.route-disable .switch-title {
+  font-size: 12px;
+}
+
+/* ---------- 表单高级选项（延迟 / 抖动 / 故障注入） ---------- */
+.advanced-toggle {
+  justify-self: start;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.advanced-toggle:hover {
+  color: var(--accent-strong);
+}
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+/* 高级选项的说明文字与输入框留出间距 */
+.advanced-grid .hint {
+  margin-top: 4px;
+}
+
+/* 停用开关独占一行 */
+.advanced-grid .switch-row {
+  grid-column: 1 / -1;
+}
+
+/* 窄屏：高级选项三列自动换行为单列 */
+@media (max-width: 720px) {
+  .advanced-grid {
+    grid-template-columns: 1fr;
+  }
+}
