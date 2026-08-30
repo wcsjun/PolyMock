@@ -242,7 +242,7 @@ Test coverage by area:
 
 ## CI
 
-The repository uses GitHub Actions (`.github/workflows/ci.yml`): on every push (to `main` and `feat/**` branches) and on all pull requests it runs `pnpm typecheck`, `pnpm typecheck:web`, `pnpm test`, and `pnpm build`. It uses Node 20, reads the pnpm version from the `packageManager` field in `package.json`, and installs with `--frozen-lockfile`.
+The repository uses GitHub Actions (`.github/workflows/ci.yml`): on every push (to `main` and `feat/**` branches) and on all pull requests it runs `pnpm typecheck`, `pnpm typecheck:web`, `pnpm test`, and `pnpm build`. It uses Node 22, reads the pnpm version from the `packageManager` field in `package.json`, and installs with `--frozen-lockfile`.
 
 ## License
 

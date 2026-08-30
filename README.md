@@ -242,7 +242,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 
 ## CI
 
-仓库使用 GitHub Actions（`.github/workflows/ci.yml`）：在 push（`main` 与 `feat/**` 分支）和所有 Pull Request 上依次执行 `pnpm typecheck`、`pnpm typecheck:web`、`pnpm test`、`pnpm build`。Node 20，pnpm 版本读取 `package.json` 的 `packageManager` 字段，安装使用 `--frozen-lockfile`。
+仓库使用 GitHub Actions（`.github/workflows/ci.yml`）：在 push（`main` 与 `feat/**` 分支）和所有 Pull Request 上依次执行 `pnpm typecheck`、`pnpm typecheck:web`、`pnpm test`、`pnpm build`。Node 22，pnpm 版本读取 `package.json` 的 `packageManager` 字段，安装使用 `--frozen-lockfile`。
 
 ## License
 
