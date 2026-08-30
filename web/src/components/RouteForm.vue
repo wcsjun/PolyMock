@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { createRoute, updateRoute } from '../api';
 import type { ConditionRow, NotifyFn, Route, RoutePayload, ServiceInfo } from '../types';
-import { buildRouteRequest, formatBody, splitRouteRequest } from '../utils';
+import { buildRouteRequest, bodyRowsToJsonValue, formatBody, jsonValueToBodyRows, splitRouteRequest } from '../utils';
 import ConditionTable from './ConditionTable.vue';
 
 const props = defineProps<{
@@ -33,6 +33,13 @@ const BODY_PLACEHOLDER = `{
   "data": {
     "id": 1001,
     "name": "PolyMock"
+  }
+}`;
+
+/* Body 页签 JSON 模式的占位示例（Postman 式期望子集） */
+const BODY_COND_PLACEHOLDER = `{
+  "user": {
+    "id": 1001
   }
 }`;
 
@@ -88,6 +95,58 @@ const activeIsDefault = computed(() => activeId.value === DEFAULT_SCENE_ID);
 
 const variantScenes = computed(() => scenes.value.filter((s) => s.localId !== DEFAULT_SCENE_ID));
 
+/* ---------- Body 页签编辑器（Postman 式 JSON ⇄ 表格） ---------- */
+
+const bodyEditorMode = ref<'json' | 'table'>('json');
+const bodyJson = ref('');
+const bodyJsonInvalid = ref(false);
+
+/** 把当前场景的 body 条件行序列化为 JSON 文本 */
+function syncBodyJson() {
+  const value = bodyRowsToJsonValue(activeScene.value.rows.body);
+  bodyJson.value = Object.keys(value as Record<string, unknown>).length
+    ? JSON.stringify(value, null, 2)
+    : '';
+  bodyJsonInvalid.value = false;
+}
+
+function setBodyMode(mode: 'json' | 'table') {
+  if (mode === 'json') syncBodyJson();
+  bodyEditorMode.value = mode;
+}
+
+/** JSON 编辑时实时解析回条件行；非法只标红，行保持最近一次合法结果 */
+function onBodyJsonInput() {
+  const raw = bodyJson.value.trim();
+  if (!raw) {
+    activeScene.value.rows.body = [];
+    bodyJsonInvalid.value = false;
+    return;
+  }
+  try {
+    activeScene.value.rows.body = jsonValueToBodyRows(JSON.parse(raw));
+    bodyJsonInvalid.value = false;
+  } catch {
+    bodyJsonInvalid.value = true;
+  }
+}
+
+/* 切换场景 / 页签 / 编辑器模式进入 body JSON 视图时，从条件行重新序列化 */
+watch(
+  () => [activeScene.value.localId, activeScene.value.tab, bodyEditorMode.value] as const,
+  ([, tab, mode]) => {
+    if (tab === 'body' && mode === 'json') syncBodyJson();
+  },
+);
+
+const blockHint = computed(() => {
+  if (activeIsDefault.value) return '准入条件：开启「必须匹配」后，不满足条件的请求将返回 400';
+  if (activeScene.value.tab === 'body' && bodyEditorMode.value === 'json') {
+    return '命中条件：请求 body 需包含以下 JSON 字段（叶子字段按点路径子集匹配）';
+  }
+  return '命中条件：请求满足所有启用行时命中本场景';
+});
+
 /* 服务下拉：选中项跨渲染保持；列表变化后若选中项不存在则回落到第一项 */
 watch(
   () => props.services,
@@ -102,7 +161,7 @@ watch(
 /* 进入/退出编辑模式：回填表单或复位（保持服务分组选择） */
 watch(
   () => props.editing,
-  (route) => {
+  async (route) => {
     if (route) {
       if (props.services.some((s) => s.id === route.serviceId)) {
         serviceId.value = route.serviceId;
@@ -128,6 +187,8 @@ watch(
         }),
       ];
       activeId.value = DEFAULT_SCENE_ID;
+      /* 表单挂在抽屉里，等抽屉显示后再聚焦 */
+      await nextTick();
       pathInput.value?.focus();
     } else {
       resetForm();
@@ -179,17 +240,47 @@ function setSceneRows(tab: CondTab, rows: ConditionRow[]) {
   activeScene.value.rows[tab] = rows;
 }
 
+function isValidJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 校验一段 body 文本，非法时标红并提示；返回是否合法 */
 function ensureJson(text: string, label: string, markInvalid: () => void): boolean {
   const raw = text.trim();
   if (!raw) return true;
+  if (isValidJson(raw)) return true;
+  markInvalid();
+  props.notify(`${label} 不是合法的 JSON`, 'err');
+  return false;
+}
+
+/** body 失焦时即时校验，非法标红 */
+function validateBodyText(scene: SceneDraft) {
+  const raw = scene.bodyText.trim();
+  scene.invalid = raw ? !isValidJson(raw) : false;
+}
+
+/** body 输入过程中仅在标红状态下复检，便于即时消除错误 */
+function onBodyInput(scene: SceneDraft) {
+  if (scene.invalid) validateBodyText(scene);
+}
+
+/** 格式化当前场景的 body 文本；非法时报错并标红 */
+function formatBodyText() {
+  const scene = activeScene.value;
+  const raw = scene.bodyText.trim();
+  if (!raw) return;
   try {
-    JSON.parse(raw);
-    return true;
+    scene.bodyText = JSON.stringify(JSON.parse(raw), null, 2);
+    scene.invalid = false;
   } catch {
-    markInvalid();
-    props.notify(`${label} 不是合法的 JSON`, 'err');
-    return false;
+    scene.invalid = true;
+    props.notify('body 不是合法的 JSON，无法格式化', 'err');
   }
 }
 
@@ -262,7 +353,6 @@ async function submit() {
       resetForm();
     }
     emit('changed');
-    pathInput.value?.focus();
   } catch (err) {
     props.notify((err as Error).message, 'err');
   } finally {
@@ -275,6 +365,7 @@ async function submit() {
   <aside class="panel form-panel">
     <div class="panel-head">
       <h2>{{ editing ? '编辑接口' : '新增接口' }}</h2>
+      <button type="button" class="drawer-close" title="关闭（Esc）" aria-label="关闭" @click="emit('cancel-edit')">×</button>
     </div>
 
     <form id="route-form" autocomplete="off" @submit.prevent="submit">
@@ -288,7 +379,7 @@ async function submit() {
 
         <div class="field">
           <label for="f-name">接口名称</label>
-          <input id="f-name" v-model="name" name="name" type="text" placeholder="如 查询用户信息" spellcheck="false">
+          <input id="f-name" v-model="name" name="name" type="text" placeholder="显示在卡片上，如 查询用户信息" spellcheck="false">
         </div>
       </div>
 
@@ -346,7 +437,7 @@ async function submit() {
 
           <button type="button" class="scene-add" @click="addScene">＋ 新增场景</button>
 
-          <p class="hint scene-side-hint">按顺序匹配：命中第一个条件全部通过的场景；都不命中走默认响应</p>
+          <p class="hint scene-side-hint" title="按顺序匹配：命中第一个条件全部通过的场景；都不命中走默认响应">按顺序匹配，都未命中走默认响应</p>
         </div>
 
         <div class="scene-main">
@@ -367,13 +458,38 @@ async function submit() {
             </button>
           </div>
 
-          <p class="hint block-hint">
-            {{ activeIsDefault
-              ? '准入条件：开启「必须匹配」后，不满足条件的请求将返回 400'
-              : '命中条件：请求满足所有启用行时命中本场景' }}
-          </p>
+          <p class="hint block-hint">{{ blockHint }}</p>
 
+          <template v-if="activeScene.tab === 'body'">
+            <div class="kv-tabs mode-tabs">
+              <button type="button" :class="{ active: bodyEditorMode === 'json' }" @click="setBodyMode('json')">JSON</button>
+              <button type="button" :class="{ active: bodyEditorMode === 'table' }" @click="setBodyMode('table')">表格</button>
+              <span class="hint mode-hint">
+                {{ bodyEditorMode === 'json' ? '写期望的 JSON 子集，叶子字段即匹配条件' : '逐行配置点路径条件，可调类型与必填' }}
+              </span>
+            </div>
+            <template v-if="bodyEditorMode === 'json'">
+              <textarea
+                v-model="bodyJson"
+                class="body-json-editor"
+                rows="6"
+                :placeholder="BODY_COND_PLACEHOLDER"
+                spellcheck="false"
+                :class="{ invalid: bodyJsonInvalid }"
+                @input="onBodyJsonInput"
+              ></textarea>
+              <p v-show="bodyJsonInvalid" class="field-error">body 条件不是合法的 JSON</p>
+            </template>
+            <ConditionTable
+              v-else
+              :rows="sceneRows('body')"
+              :key-placeholder="COND_TABS.find((t) => t.key === 'body')?.keyPh"
+              :value-placeholder="COND_TABS.find((t) => t.key === 'body')?.valuePh"
+              @update:rows="(rows) => setSceneRows('body', rows)"
+            />
+          </template>
           <ConditionTable
+            v-else
             :rows="sceneRows(activeScene.tab)"
             :key-placeholder="COND_TABS.find((t) => t.key === activeScene.tab)?.keyPh"
             :value-placeholder="COND_TABS.find((t) => t.key === activeScene.tab)?.valuePh"
@@ -392,7 +508,10 @@ async function submit() {
           <div class="field resp-field">
             <div class="label-row">
               <label>返回响应</label>
-              <span v-if="activeIsDefault" class="hint">无场景命中时返回</span>
+              <span class="label-row-ops">
+                <span v-if="activeIsDefault" class="hint">无场景命中时返回</span>
+                <button type="button" class="mini-btn" title="格式化 JSON" @click="formatBodyText">格式化</button>
+              </span>
             </div>
             <input v-model.number="activeScene.status" aria-label="响应状态码" type="number" min="100" max="599">
             <textarea
@@ -401,6 +520,8 @@ async function submit() {
               :placeholder="BODY_PLACEHOLDER"
               spellcheck="false"
               :class="{ invalid: activeScene.invalid }"
+              @blur="validateBodyText(activeScene)"
+              @input="onBodyInput(activeScene)"
             ></textarea>
             <p v-show="activeScene.invalid" class="field-error">body 不是合法的 JSON</p>
           </div>
@@ -427,7 +548,7 @@ async function submit() {
 /* ---------- 场景编辑器：左侧场景列表 + 右侧同构编辑区 ---------- */
 .scene-editor {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
@@ -573,6 +694,12 @@ async function submit() {
   border: 1px solid var(--line);
   color: var(--text-dim);
   font-size: 10px;
+}
+
+.body-json-editor {
+  min-height: 120px;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .resp-field {

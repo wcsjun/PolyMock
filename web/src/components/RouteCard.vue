@@ -1,21 +1,29 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { Route } from '../types';
-import { conditionSummary, formatBody, routeCardStyle } from '../utils';
+import type { NotifyFn, Route } from '../types';
+import { conditionSummary, copyText, formatBody, routeCardStyle, routeUrl } from '../utils';
 
 const props = defineProps<{
   route: Route;
   index: number;
+  port: number;
+  notify: NotifyFn;
 }>();
 
 const emit = defineEmits<{
   edit: [route: Route];
   remove: [route: Route];
+  test: [route: Route];
 }>();
 
 const cardStyle = computed(() => routeCardStyle(props.route.method, props.index));
 const bodyPreview = computed(() => formatBody(props.route.response.body));
 const variants = computed(() => props.route.variants ?? []);
+
+async function copyUrl() {
+  const ok = await copyText(routeUrl(props.port, props.route.path));
+  props.notify(ok ? `已复制 ${props.route.method} ${props.route.path} 的地址` : '复制失败，请手动复制', ok ? 'ok' : 'err');
+}
 </script>
 
 <template>
@@ -24,6 +32,24 @@ const variants = computed(() => props.route.variants ?? []);
     <div class="route-row">
       <span class="method-badge">{{ route.method }}</span>
       <span class="route-path" :title="route.path">{{ route.path }}</span>
+      <button
+        type="button"
+        class="route-copy"
+        title="复制接口地址"
+        :aria-label="`复制 ${route.method} ${route.path} 地址`"
+        @click="copyUrl"
+      >
+        ⧉
+      </button>
+      <button
+        type="button"
+        class="route-test"
+        title="在嵌入测试中打开"
+        :aria-label="`测试 ${route.method} ${route.path}`"
+        @click="emit('test', route)"
+      >
+        ⛶
+      </button>
       <button
         type="button"
         class="route-edit"

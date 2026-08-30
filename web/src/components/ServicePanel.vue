@@ -16,6 +16,7 @@ const emit = defineEmits<{
   remove: [service: ServiceInfo];
   edit: [route: Route];
   'remove-route': [route: Route];
+  test: [route: Route];
   changed: [];
 }>();
 
@@ -114,14 +115,17 @@ async function submitService() {
           </button>
         </div>
         <div v-if="expanded.has(svc.id)" class="service-routes">
-          <p v-if="routesOf(svc.id).length === 0" class="service-empty">该服务下还没有接口，可在右侧表单添加</p>
+          <p v-if="routesOf(svc.id).length === 0" class="service-empty">该服务下还没有接口，点击上方「＋ 新增接口」添加</p>
           <RouteCard
             v-for="(route, i) in routesOf(svc.id)"
             :key="route.id"
             :route="route"
             :index="i"
+            :port="svc.port"
+            :notify="notify"
             @edit="emit('edit', $event)"
             @remove="emit('remove-route', $event)"
+            @test="emit('test', $event)"
           />
         </div>
       </div>
@@ -129,7 +133,7 @@ async function submitService() {
 
     <form class="service-form" autocomplete="off" @submit.prevent="submitService">
       <input v-model="sName" name="name" type="text" placeholder="服务名称，如 订单服务" spellcheck="false">
-      <input v-model.number="sPort" name="port" type="number" placeholder="端口" min="1" max="65535">
+      <input v-model.number="sPort" name="port" type="number" placeholder="端口，如 3001" min="1" max="65535">
       <button type="submit" class="svc-add" title="新增服务（独立端口监听）">＋</button>
     </form>
   </section>

@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'vue';
-import type { ConditionRow, RequestCondition, RouteRequest } from './types';
+import type { ConditionRow, ConditionType, RequestCondition, RouteRequest } from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -75,8 +75,74 @@ export function splitRouteRequest(request?: RouteRequest): {
   };
 }
 
-/** 条件摘要文案，如「Header X-Role=admin」；用于卡片变体列表 */
-export function conditionSummary(request?: RouteRequest): string[] {
+/* ---------- Body 页签的 JSON 编辑器互转（Postman 风格） ---------- */
+
+/** 条件行 → 期望 JSON 子集：启用行按点路径展开成嵌套对象，叶子值按类型还原 */
+export function bodyRowsToJsonValue(rows: ConditionRow[]): unknown {
+  const enabled = rows.filter((row) => row.enabled && row.key.trim());
+  const root: Record<string, unknown> = {};
+  for (const row of enabled) {
+    const parts = row.key.trim().split('.');
+    let node: Record<string, unknown> = root;
+    for (const part of parts.slice(0, -1)) {
+      const existing = node[part];
+      if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) {
+        node[part] = {};
+      }
+      node = node[part] as Record<string, unknown>;
+    }
+    let value: unknown;
+    if (row.value === '') value = '';
+    else if (row.type === 'number') {
+      const num = Number(row.value);
+      value = Number.isNaN(num) ? row.value : num;
+    } else if (row.type === 'boolean') value = row.value === 'true';
+    else if (row.type === 'json') {
+      try {
+        value = JSON.parse(row.value);
+      } catch {
+        value = row.value;
+      }
+    } else value = row.value;
+    node[parts[parts.length - 1]] = value;
+  }
+  return root;
+}
+
+/** 期望 JSON 子集 → 条件行：叶子字段生成点路径行，类型按字面量推断，默认必填启用 */
+export function jsonValueToBodyRows(value: unknown): ConditionRow[] {
+  const rows: ConditionRow[] = [];
+  const walk = (node: unknown, path: string) => {
+    if (node !== null && typeof node === 'object' && !Array.isArray(node)) {
+      for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+        walk(child, path ? `${path}.${key}` : key);
+      }
+      return;
+    }
+    let type: ConditionType = 'string';
+    let text: string;
+    if (typeof node === 'number') {
+      type = 'number';
+      text = String(node);
+    } else if (typeof node === 'boolean') {
+      type = 'boolean';
+      text = String(node);
+    } else if (node === null) {
+      type = 'json';
+      text = 'null';
+    } else if (Array.isArray(node) || typeof node === 'object') {
+      type = 'json';
+      text = JSON.stringify(node);
+    } else {
+      text = String(node);
+    }
+    rows.push({ key: path, value: text, type, required: true, enabled: true });
+  };
+  walk(value, '');
+  return rows;
+}
+
+/** 条件摘要文案，如「Header X-Role=admin」；用于卡片变体列表 */export function conditionSummary(request?: RouteRequest): string[] {
   if (!request) return ['无条件（总是命中）'];
   const format = (label: string, condition: RequestCondition): string => {
     const base = condition.value === '' ? `${label} ${condition.key} 存在` : `${label} ${condition.key}=${condition.value}`;
@@ -90,6 +156,34 @@ export function conditionSummary(request?: RouteRequest): string[] {
   for (const c of request.query ?? []) parts.push(format('Query', c));
   for (const c of request.body ?? []) parts.push(format('Body', c));
   return parts.length ? parts : ['无条件（总是命中）'];
+}
+
+/** 拼接接口的完整 Mock 地址（与控制台同主机，端口取所属服务端口） */
+export function routeUrl(port: number, path: string): string {
+  return `http://${location.hostname}:${port}${path}`;
+}
+
+/** 复制文本到剪贴板；非安全上下文回落 execCommand */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    return ok;
+  }
 }
 
 export interface CardStyle extends CSSProperties {

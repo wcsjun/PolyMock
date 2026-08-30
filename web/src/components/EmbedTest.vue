@@ -76,6 +76,14 @@ function openExternal() {
   if (currentEmbedUrl) window.open(currentEmbedUrl, '_blank', 'noopener');
 }
 
+/** 供外部（接口卡片「测试」）直接填入地址并加载 */
+function loadUrl(url: string) {
+  urlInput.value = url;
+  load();
+}
+
+defineExpose({ loadUrl });
+
 function fillStage() {
   const el = boxEl.value;
   if (!el) return;
