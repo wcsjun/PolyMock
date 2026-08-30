@@ -5,7 +5,6 @@ import EmbedTest from './components/EmbedTest.vue';
 import RouteForm from './components/RouteForm.vue';
 import ServicePanel from './components/ServicePanel.vue';
 import type { Route, ServiceInfo, ToastKind, ViewName } from './types';
-import { routeUrl } from './utils';
 
 const VIEW_KEY = 'polymock:view';
 const SIDEBAR_MIN = 120;
@@ -160,16 +159,6 @@ watch(drawerOpen, (open) => {
   document.body.style.overflow = open ? 'hidden' : '';
 });
 
-/* 从接口卡片直达嵌入测试：切换视图并加载该接口地址 */
-const embedView = ref<InstanceType<typeof EmbedTest> | null>(null);
-
-function testRoute(route: Route) {
-  const svc = services.value.find((s) => s.id === route.serviceId);
-  if (!svc) return;
-  switchView('embed');
-  embedView.value?.loadUrl(routeUrl(svc.port, route.path));
-}
-
 async function removeRoute(route: Route) {
   if (!window.confirm(`删除接口 ${route.method} ${route.path}？删除后无法恢复`)) return;
   try {
@@ -290,14 +279,13 @@ function onSidebarRzDown(event: PointerEvent) {
             @remove="removeService"
             @edit="editRoute"
             @remove-route="removeRoute"
-            @test="testRoute"
             @changed="loadAll"
           />
         </div>
       </section>
 
       <!-- 嵌入测试 -->
-      <EmbedTest ref="embedView" :active="view === 'embed'" :notify="showToast" />
+      <EmbedTest :active="view === 'embed'" :notify="showToast" />
     </main>
   </div>
 

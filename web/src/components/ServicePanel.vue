@@ -16,7 +16,6 @@ const emit = defineEmits<{
   remove: [service: ServiceInfo];
   edit: [route: Route];
   'remove-route': [route: Route];
-  test: [route: Route];
   changed: [];
 }>();
 
@@ -125,7 +124,6 @@ async function submitService() {
             :notify="notify"
             @edit="emit('edit', $event)"
             @remove="emit('remove-route', $event)"
-            @test="emit('test', $event)"
           />
         </div>
       </div>

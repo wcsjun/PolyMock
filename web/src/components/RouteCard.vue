@@ -13,7 +13,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   edit: [route: Route];
   remove: [route: Route];
-  test: [route: Route];
 }>();
 
 const cardStyle = computed(() => routeCardStyle(props.route.method, props.index));
@@ -23,6 +22,13 @@ const variants = computed(() => props.route.variants ?? []);
 async function copyUrl() {
   const ok = await copyText(routeUrl(props.port, props.route.path));
   props.notify(ok ? `已复制 ${props.route.method} ${props.route.path} 的地址` : '复制失败，请手动复制', ok ? 'ok' : 'err');
+}
+
+/* 浏览器只能直接发起 GET，其余方法不提供此入口 */
+const canOpenInBrowser = computed(() => props.route.method === 'GET');
+
+function openInBrowser() {
+  window.open(routeUrl(props.port, props.route.path), '_blank', 'noopener');
 }
 </script>
 
@@ -42,13 +48,14 @@ async function copyUrl() {
         ⧉
       </button>
       <button
+        v-if="canOpenInBrowser"
         type="button"
         class="route-test"
-        title="在嵌入测试中打开"
-        :aria-label="`测试 ${route.method} ${route.path}`"
-        @click="emit('test', route)"
+        title="在新标签页打开（GET）"
+        :aria-label="`在新标签页打开 ${route.method} ${route.path}`"
+        @click="openInBrowser"
       >
-        ⛶
+        ↗
       </button>
       <button
         type="button"
