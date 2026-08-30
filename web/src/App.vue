@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { deleteRoute, deleteService, fetchRoutes, fetchServices } from './api';
 import EmbedTest from './components/EmbedTest.vue';
 import RouteForm from './components/RouteForm.vue';
 import ServicePanel from './components/ServicePanel.vue';
 import type { Route, ServiceInfo, ToastKind, ViewName } from './types';
+import { routeUrl } from './utils';
 
 const VIEW_KEY = 'polymock:view';
 const SIDEBAR_MIN = 120;
@@ -98,9 +99,14 @@ onMounted(() => {
   pollTimer = setInterval(() => {
     if (!document.hidden) void loadAll();
   }, POLL_INTERVAL);
+  document.addEventListener('keydown', onKeydown);
 });
 
-onBeforeUnmount(() => clearInterval(pollTimer));
+onBeforeUnmount(() => {
+  clearInterval(pollTimer);
+  document.removeEventListener('keydown', onKeydown);
+  document.body.style.overflow = '';
+});
 
 /* ---------- 服务分组操作 ---------- */
 
@@ -123,12 +129,49 @@ async function removeService(svc: ServiceInfo) {
 /* ---------- 接口编辑 / 删除 ---------- */
 
 const editingRoute = ref<Route | null>(null);
+const drawerOpen = ref(false);
+
+function openCreate() {
+  editingRoute.value = null;
+  drawerOpen.value = true;
+}
 
 function editRoute(route: Route) {
   editingRoute.value = route;
+  drawerOpen.value = true;
+}
+
+function closeDrawer() {
+  drawerOpen.value = false;
+  editingRoute.value = null;
+}
+
+function onFormChanged() {
+  void loadAll();
+  closeDrawer();
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && drawerOpen.value) closeDrawer();
+}
+
+/* 抽屉打开时锁定背景滚动 */
+watch(drawerOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : '';
+});
+
+/* 从接口卡片直达嵌入测试：切换视图并加载该接口地址 */
+const embedView = ref<InstanceType<typeof EmbedTest> | null>(null);
+
+function testRoute(route: Route) {
+  const svc = services.value.find((s) => s.id === route.serviceId);
+  if (!svc) return;
+  switchView('embed');
+  embedView.value?.loadUrl(routeUrl(svc.port, route.path));
 }
 
 async function removeRoute(route: Route) {
+  if (!window.confirm(`删除接口 ${route.method} ${route.path}？删除后无法恢复`)) return;
   try {
     await deleteRoute(route);
     showToast(`已删除 ${route.method} ${route.path}`);
@@ -232,6 +275,12 @@ function onSidebarRzDown(event: PointerEvent) {
       <!-- 接口管理 -->
       <section id="view-routes" class="view" :hidden="view !== 'routes'">
         <div class="layout">
+          <div class="view-toolbar">
+            <button type="button" class="add-route-btn" @click="openCreate">
+              <span class="submit-plus">＋</span> 新增接口
+            </button>
+          </div>
+
           <ServicePanel
             :services="services"
             :routes="routes"
@@ -241,22 +290,29 @@ function onSidebarRzDown(event: PointerEvent) {
             @remove="removeService"
             @edit="editRoute"
             @remove-route="removeRoute"
+            @test="testRoute"
             @changed="loadAll"
-          />
-
-          <RouteForm
-            :services="services"
-            :editing="editingRoute"
-            :notify="showToast"
-            @changed="loadAll"
-            @cancel-edit="editingRoute = null"
           />
         </div>
       </section>
 
       <!-- 嵌入测试 -->
-      <EmbedTest :active="view === 'embed'" :notify="showToast" />
+      <EmbedTest ref="embedView" :active="view === 'embed'" :notify="showToast" />
     </main>
+  </div>
+
+  <!-- 新增/编辑接口抽屉 -->
+  <div v-show="drawerOpen">
+    <div class="drawer-mask" @click="closeDrawer"></div>
+    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-label="接口编辑表单">
+      <RouteForm
+        :services="services"
+        :editing="editingRoute"
+        :notify="showToast"
+        @changed="onFormChanged"
+        @cancel-edit="closeDrawer"
+      />
+    </aside>
   </div>
 
   <div v-if="toast.visible" class="toast" :class="toast.kind">{{ toast.message }}</div>

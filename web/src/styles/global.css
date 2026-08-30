@@ -6,7 +6,7 @@
   --line-strong: #cfd8e3;
   --text: #1c2733;
   --text-dim: #5b6b7c;
-  --text-faint: #8a97a6;
+  --text-faint: #62707f;
   --accent: #0e9f5d;
   --accent-strong: #0b7a48;
   --accent-dim: rgba(14, 159, 93, 0.12);
@@ -177,12 +177,42 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(500px, 620px);
-  gap: 22px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
   max-width: 1400px;
   margin: 0 auto;
   align-items: start;
 }
+
+.view-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.add-route-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  transition: filter 0.15s, transform 0.15s, box-shadow 0.2s;
+}
+
+.add-route-btn:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(14, 159, 93, 0.28);
+}
+
+.add-route-btn:active { transform: translateY(0); }
 
 .panel {
   background: var(--panel);
@@ -464,8 +494,9 @@ body {
   white-space: nowrap;
 }
 
+.route-copy,
+.route-test,
 .route-edit {
-  margin-left: auto;
   flex: none;
   border: 1px solid var(--line);
   background: none;
@@ -479,10 +510,30 @@ body {
   transition: all 0.15s;
 }
 
+.route-copy { margin-left: auto; }
+
+.route-copy:hover,
+.route-test:hover,
 .route-edit:hover {
   color: var(--accent-strong);
   border-color: var(--accent);
   background: var(--accent-dim);
+}
+
+/* 操作按钮常显但弱化，悬停卡片时凸显；触屏等无悬停设备保持原样 */
+.route-copy, .route-test, .route-edit, .route-remove { opacity: 0.35; }
+
+@media (hover: hover) {
+  .route-card:hover .route-copy,
+  .route-card:hover .route-test,
+  .route-card:hover .route-edit,
+  .route-card:hover .route-remove,
+  .route-copy:focus-visible,
+  .route-test:focus-visible,
+  .route-edit:focus-visible,
+  .route-remove:focus-visible {
+    opacity: 1;
+  }
 }
 
 .route-remove {
@@ -557,8 +608,40 @@ body {
   line-height: 1.8;
 }
 
-/* ---------- 表单 ---------- */
-.form-panel { position: sticky; top: 26px; }
+/* ---------- 表单（挂在抽屉内） ---------- */
+.form-panel {
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow-y: auto;
+}
+
+.form-panel .panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.drawer-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.drawer-close:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(207, 34, 46, 0.06);
+}
 
 #route-form { padding: 18px; display: grid; gap: 16px; }
 
@@ -576,6 +659,31 @@ body {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+}
+
+.label-row-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mini-btn {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.mini-btn:hover {
+  color: var(--accent-strong);
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .hint { font-size: 11px; color: var(--text-faint); text-transform: none; letter-spacing: 0; }
@@ -882,6 +990,37 @@ body.sidebar-resizing iframe { pointer-events: none; }
 
 .rz-e:hover, .rz-s:hover, .rz-se:hover { background-color: var(--accent-dim); }
 
+/* ---------- 新增/编辑接口抽屉 ---------- */
+.drawer-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(28, 39, 51, 0.42);
+  animation: fade-in 0.2s ease both;
+}
+
+.drawer-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  /* 随视口自适应：窄屏不低于 640px，宽屏最多 940px */
+  width: min(clamp(640px, 46vw, 940px), 92vw);
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 32px rgba(28, 39, 51, 0.16);
+  animation: drawer-in 0.25s ease both;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(100%); }
+}
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed;
@@ -927,8 +1066,6 @@ body.sidebar-resizing iframe { pointer-events: none; }
   .sidebar-rz { display: none; }
 
   .view { padding: 18px 14px 40px; }
-  .layout { grid-template-columns: 1fr; }
-  .form-panel { position: static; }
 
   .embed-frame { width: 100%; }
 }
@@ -938,6 +1075,17 @@ body.sidebar-resizing iframe { pointer-events: none; }
   display: flex;
   gap: 4px;
   margin-bottom: 8px;
+}
+
+/* Body 页签的编辑器模式切换（JSON / 表格），与页签行视觉区分 */
+.mode-tabs {
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.mode-hint {
+  margin-left: 4px;
+  align-self: center;
 }
 
 .kv-tabs button {
