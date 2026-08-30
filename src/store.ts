@@ -1,8 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { PersistedState } from './types.js';
+import { SCHEMA_VERSION, type PersistedState } from './types.js';
 
-const EMPTY: PersistedState = { version: 1, services: [], routes: [] };
+const EMPTY: PersistedState = { version: SCHEMA_VERSION, services: [], routes: [] };
+
+/**
+ * 版本迁移：把旧版本状态升级到当前版本。
+ * 1 -> 2：无字段变化，迁移动作 = 标记 version: 2 并保留数据；
+ * 未来版本（2 -> 3 ...）在此按旧版本号逐级扩展迁移逻辑。
+ */
+function migrate(state: PersistedState): PersistedState {
+  return { ...state, version: SCHEMA_VERSION };
+}
 
 export function loadState(filePath: string): PersistedState {
   let raw: string;
@@ -14,7 +23,7 @@ export function loadState(filePath: string): PersistedState {
   try {
     const data = JSON.parse(raw);
     const state: PersistedState = {
-      version: 1,
+      version: SCHEMA_VERSION,
       services: Array.isArray(data?.services) ? data.services : [],
       routes: Array.isArray(data?.routes) ? data.routes : [],
     };
@@ -25,6 +34,10 @@ export function loadState(filePath: string): PersistedState {
       if (typeof activeVariant === 'string' || activeVariant === null) {
         state.settings = { activeVariant };
       }
+    }
+    /* 非法/缺失 version 按 1（旧版本）处理，统一走迁移后返回 */
+    if (data?.version !== SCHEMA_VERSION) {
+      return migrate(state);
     }
     return state;
   } catch (err) {

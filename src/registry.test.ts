@@ -242,3 +242,65 @@ describe('RouteRegistry', () => {
     expect(new RouteRegistry(restored.toJSON()).getSettings()).toEqual({ activeVariant: null });
   });
 });
+describe('路径参数匹配与形状冲突', () => {
+  it('findWithParams 按段匹配提取参数，find 返回对应路由', () => {
+    const registry = new RouteRegistry();
+    registry.add('default', 'GET', '/api/users/:id', { status: 200, body: { id: '{{params.id}}' } });
+    const found = registry.findWithParams('default', 'GET', '/api/users/42');
+    expect(found?.route.path).toBe('/api/users/:id');
+    expect(found?.params).toEqual({ id: '42' });
+    expect(registry.find('default', 'GET', '/api/users/42')?.path).toBe('/api/users/:id');
+  });
+
+  it('精确路由优先于模式路由；段数或字面量不一致不命中', () => {
+    const registry = new RouteRegistry();
+    registry.add('default', 'GET', '/api/users/:id', { status: 200, body: 'pattern' });
+    registry.add('default', 'GET', '/api/users/42', { status: 200, body: 'exact' });
+    expect(registry.find('default', 'GET', '/api/users/42')?.path).toBe('/api/users/42');
+    expect(registry.find('default', 'GET', '/api/users/43')?.path).toBe('/api/users/:id');
+    expect(registry.find('default', 'GET', '/api/users/42/extra')).toBeUndefined();
+    expect(registry.find('default', 'GET', '/api/orders/42')).toBeUndefined();
+  });
+
+  it('禁用的模式路由不参与匹配', () => {
+    const registry = new RouteRegistry();
+    const route = registry.add('default', 'GET', '/api/users/:id', { status: 200, body: '' });
+    registry.update(route.id, { disabled: true });
+    expect(registry.findWithParams('default', 'GET', '/api/users/1')).toBeUndefined();
+  });
+
+  it('findShapeConflict 检测形状冲突（参数归一化），excludeId 排除自身', () => {
+    const registry = new RouteRegistry();
+    const pattern = registry.add('default', 'GET', '/api/users/:id', { status: 200, body: '' });
+    expect(registry.findShapeConflict('default', 'GET', '/api/users/42')?.id).toBe(pattern.id);
+    expect(registry.findShapeConflict('default', 'GET', '/api/users/42', pattern.id)).toBeUndefined();
+    expect(registry.findShapeConflict('default', 'GET', '/api/users/42/posts')).toBeUndefined();
+  });
+
+  it('update 检测形状冲突并保留原路由', () => {
+    const registry = new RouteRegistry();
+    const pattern = registry.add('default', 'GET', '/api/users/:id', { status: 200, body: 'p' });
+    const exact = registry.add('default', 'PUT', '/api/users/42', { status: 200, body: 'e' });
+    const result = registry.update(exact.id, { method: 'GET' });
+    expect(result).toMatchObject({ ok: false, error: 'conflict', conflict: { id: pattern.id } });
+  });
+
+  it('behavior 支持 sequence 与 crud 并持久化', () => {
+    const registry = new RouteRegistry();
+    const route = registry.add(
+      'default', 'GET', '/api/x', { status: 200, body: 'a' },
+      'x', undefined, undefined, undefined,
+      { sequence: [{ status: 200, body: 's1' }], crud: false },
+    );
+    expect(route.sequence).toEqual([{ status: 200, body: 's1' }]);
+    const updated = registry.update(route.id, { sequence: [], crud: true });
+    expect(updated.ok).toBe(true);
+    if (updated.ok) {
+      expect(updated.route.sequence).toEqual([]);
+      expect(updated.route.crud).toBe(true);
+    }
+    const restored = new RouteRegistry(registry.toJSON());
+    expect(restored.find('default', 'GET', '/api/x')?.crud).toBe(true);
+    expect(restored.find('default', 'GET', '/api/x')?.sequence).toEqual([]);
+  });
+});

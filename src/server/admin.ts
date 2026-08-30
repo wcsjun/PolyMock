@@ -7,6 +7,7 @@ import {
   DEFAULT_SERVICE_ID,
   type ConditionType,
   type RequestCondition,
+  type RequestLogEntry,
   type ResponseVariant,
   type Route,
   type RouteRequest,
@@ -18,11 +19,29 @@ export interface AdminOptions {
   mainPort: number;
   /** 请求日志存储（/requests 端点读取与清空）；缺省时返回空列表 */
   logs?: RequestLogStore;
+  /** 管理令牌：设置后所有 /__polymock 请求需携带 x-polymock-token 头或 ?token= 参数；缺省不校验 */
+  adminToken?: string;
+  /** 代理目标白名单（host 列表）：设置后 PUT proxy 与转发均要求目标 hostname 在白名单内；缺省不校验 */
+  proxyAllowHosts?: string[];
 }
 
 /** 请求日志查询的缺省与上限条数 */
 const DEFAULT_REQUESTS_LIMIT = 100;
 const MAX_REQUESTS_LIMIT = 500;
+
+/** SSE 心跳间隔（毫秒）：定期写注释行，防止代理/负载均衡断开空闲连接 */
+const SSE_HEARTBEAT_MS = 25_000;
+
+/** 校验代理目标 host 是否在白名单内（大小写不敏感，按 hostname 比对，忽略端口）；管理端与转发前共用 */
+export function isHostAllowed(target: string, allowHosts: string[]): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(target).hostname;
+  } catch {
+    return false;
+  }
+  return allowHosts.some((host) => host.trim().toLowerCase() === hostname.toLowerCase());
+}
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -116,13 +135,13 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
   return { ok: true, value: list };
 }
 
-/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate）；未提供的字段不出现在结果中 */
-function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>> {
+/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate / crud）；未提供的字段不出现在结果中 */
+function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud'>> {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, error: '请求体需为 JSON 对象' };
   }
   const source = raw as Record<string, unknown>;
-  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'> = {};
+  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud'> = {};
   if (source.disabled !== undefined) {
     if (typeof source.disabled !== 'boolean') {
       return { ok: false, error: 'disabled 需为布尔值' };
@@ -144,7 +163,43 @@ function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' |
     }
     result.failureRate = source.failureRate;
   }
+  if (source.crud !== undefined) {
+    if (typeof source.crud !== 'boolean') {
+      return { ok: false, error: 'crud 需为布尔值' };
+    }
+    result.crud = source.crud;
+  }
   return { ok: true, value: result };
+}
+
+/** 校验 path 段格式：非空段要么为字面量，要么为 :参数名（: 后非空） */
+function validatePathSegments(routePath: string): string | null {
+  for (const segment of routePath.split('/')) {
+    if (!segment) continue;
+    if (segment.startsWith(':') && segment.length === 1) {
+      return `path 段 "${segment}" 非法：参数段需为 :参数名`;
+    }
+  }
+  return null;
+}
+
+/** 解析序列响应列表：每项 status 100-599 整数，body 走 parseResponseBody */
+function parseSequence(raw: unknown): ParseResult<Array<{ status: number; body: unknown }>> {
+  if (!Array.isArray(raw)) return { ok: false, error: 'sequence 需为数组' };
+  const list: Array<{ status: number; body: unknown }> = [];
+  for (const [index, item] of raw.entries()) {
+    if (item === null || typeof item !== 'object') {
+      return { ok: false, error: `sequence[${index}] 需为对象` };
+    }
+    const status = (item as { status?: unknown }).status;
+    if (!Number.isInteger(status) || (status as number) < 100 || (status as number) > 599) {
+      return { ok: false, error: `sequence[${index}] 的 status 需为 100-599 的整数` };
+    }
+    const bodyParsed = parseResponseBody((item as { body?: unknown }).body, `sequence[${index}]`);
+    if (!bodyParsed.ok) return bodyParsed;
+    list.push({ status: status as number, body: bodyParsed.value });
+  }
+  return { ok: true, value: list };
 }
 
 /** 管理接口返回的服务对象：附加 isDefault / running / 接口数量 */
@@ -159,6 +214,22 @@ function describeService(registry: RouteRegistry, manager: ServiceManagerLike, s
 
 export function createAdminRouter(registry: RouteRegistry, manager: ServiceManagerLike, options: AdminOptions): express.Router {
   const router = express.Router();
+
+  // ---- 管理令牌校验（全局中间件）：设置 adminToken 后所有请求需带 x-polymock-token 头或 ?token= 参数 ----
+  // SSE（/events）无法携带自定义 header，同样接受 query token（EventSource 场景）
+  router.use((req, res, next) => {
+    if (!options.adminToken) {
+      next();
+      return;
+    }
+    const headerToken = req.get('x-polymock-token');
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+    if (headerToken === options.adminToken || queryToken === options.adminToken) {
+      next();
+      return;
+    }
+    res.status(401).json({ ok: false, error: '需要管理令牌（x-polymock-token 头或 ?token= 参数）' });
+  });
 
   // ---- 服务分组管理 ----
   router.get('/services', (_req, res) => {
@@ -241,6 +312,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
         res.status(400).json({ ok: false, error: 'target 需为合法的 http(s) URL' });
         return;
       }
+      /* 白名单校验：设置 proxyAllowHosts 后，target 的 hostname 必须在白名单内 */
+      if (options.proxyAllowHosts && options.proxyAllowHosts.length > 0 && !isHostAllowed(target, options.proxyAllowHosts)) {
+        res.status(400).json({ ok: false, error: '代理目标不在白名单内' });
+        return;
+      }
       proxyTarget = target;
     }
     if (!registry.updateService(serviceId, { proxyTarget })) {
@@ -262,6 +338,36 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   router.delete('/requests', (_req, res) => {
     options.logs?.clear();
     res.json({ ok: true });
+  });
+
+  // ---- 请求日志 SSE 实时推送（event: log，data 为日志条目 JSON）----
+  router.get('/events', (req, res) => {
+    res.setHeader('content-type', 'text/event-stream');
+    res.setHeader('cache-control', 'no-cache');
+    res.setHeader('connection', 'keep-alive');
+    res.flushHeaders();
+
+    /* 新日志条目推送给客户端；JSON.stringify 输出不含换行，不会破坏 SSE 帧 */
+    const onEntry = (entry: RequestLogEntry) => {
+      res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
+    };
+    options.logs?.on('entry', onEntry);
+
+    /* 定期心跳注释行，防止空闲连接被中间层掐断 */
+    const heartbeat = setInterval(() => {
+      res.write(': ping\n\n');
+    }, SSE_HEARTBEAT_MS);
+
+    /* 客户端断开：移除监听并清理心跳定时器（req/res close 双保险，幂等） */
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      options.logs?.off('entry', onEntry);
+      clearInterval(heartbeat);
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
   });
 
   // ---- 全局设置（场景集）----
@@ -288,9 +394,14 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.post('/routes', (req, res) => {
-    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants } = req.body ?? {};
+    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence } = req.body ?? {};
     if (typeof method !== 'string' || typeof routePath !== 'string' || !routePath.startsWith('/')) {
       res.status(400).json({ ok: false, error: 'method 与 path 均为必填字符串，path 需以 / 开头' });
+      return;
+    }
+    const pathError = validatePathSegments(routePath);
+    if (pathError) {
+      res.status(400).json({ ok: false, error: pathError });
       return;
     }
     const routeName = typeof name === 'string' ? name.trim() : '';
@@ -304,9 +415,10 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: '服务分组不存在' });
       return;
     }
-    /* 用 findAny 做冲突检查：已禁用的路由仍占用 method + path，不允许静默覆盖 */
-    if (registry.findAny(sid, method, routePath)) {
-      res.status(409).json({ ok: false, error: `接口 ${method.toUpperCase()} ${routePath} 已存在` });
+    /* 形状冲突检查（findShapeConflict 覆盖精确重复与路径参数互撞；已禁用路由同样占用形状） */
+    const shapeConflict = registry.findShapeConflict(sid, method, routePath);
+    if (shapeConflict) {
+      res.status(409).json({ ok: false, error: `接口 ${method.toUpperCase()} ${routePath} 与已有接口 ${shapeConflict.method} ${shapeConflict.path} 形状冲突` });
       return;
     }
     if (requireMatch !== undefined && typeof requireMatch !== 'boolean') {
@@ -317,6 +429,16 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     if (!behaviorParsed.ok) {
       res.status(400).json({ ok: false, error: behaviorParsed.error });
       return;
+    }
+
+    let routeSequence: Array<{ status: number; body: unknown }> | undefined;
+    if (sequence !== undefined) {
+      const parsed = parseSequence(sequence);
+      if (!parsed.ok) {
+        res.status(400).json({ ok: false, error: parsed.error });
+        return;
+      }
+      routeSequence = parsed.value;
     }
 
     const bodyParsed = parseResponseBody(response?.body, 'response');
@@ -349,7 +471,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       status: response?.status ?? 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
       body: bodyParsed.value,
-    }, routeName, routeRequest, requireMatch, routeVariants, behaviorParsed.value);
+    }, routeName, routeRequest, requireMatch, routeVariants, { ...behaviorParsed.value, sequence: routeSequence });
     res.status(201).json({ ok: true, route });
   });
 
@@ -365,8 +487,8 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.put('/routes/:id', (req, res) => {
-    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants } = req.body ?? {};
-    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>> = {};
+    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence } = req.body ?? {};
+    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud'>> = {};
 
     if (serviceId !== undefined) {
       if (typeof serviceId !== 'string' || !serviceId) {
@@ -396,6 +518,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     if (routePath !== undefined) {
       if (typeof routePath !== 'string' || !routePath.startsWith('/')) {
         res.status(400).json({ ok: false, error: 'path 需以 / 开头的字符串' });
+        return;
+      }
+      const pathError = validatePathSegments(routePath);
+      if (pathError) {
+        res.status(400).json({ ok: false, error: pathError });
         return;
       }
       patch.path = routePath;
@@ -435,7 +562,15 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       }
       patch.variants = parsed.value;
     }
-    /* 行为字段（disabled / delayMs / jitterMs / failureRate）可单独作为 patch */
+    if (sequence !== undefined) {
+      const parsed = parseSequence(sequence);
+      if (!parsed.ok) {
+        res.status(400).json({ ok: false, error: parsed.error });
+        return;
+      }
+      patch.sequence = parsed.value;
+    }
+    /* 行为字段（disabled / delayMs / jitterMs / failureRate / crud）可单独作为 patch */
     const behaviorParsed = parseBehaviorFields(req.body);
     if (!behaviorParsed.ok) {
       res.status(400).json({ ok: false, error: behaviorParsed.error });
@@ -444,7 +579,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     Object.assign(patch, behaviorParsed.value);
 
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants / disabled / delayMs / jitterMs / failureRate）' });
+      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud）' });
       return;
     }
 

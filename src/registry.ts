@@ -8,9 +8,34 @@ import type {
   RouteResponse,
   Service,
 } from './types.js';
+import { SCHEMA_VERSION } from './types.js';
 
-/** 路由响应行为字段（禁用 / 延迟 / 抖动 / 故障注入），可通过 add 的 behavior 与 update 的 patch 设置 */
-export type RouteBehavior = Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>;
+/** 路由响应行为字段（禁用/延迟/抖动/故障/序列/CRUD），可通过 add 的 behavior 与 update 的 patch 设置 */
+export type RouteBehavior = Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud'>;
+
+/** 模式路径与实际路径段匹配；命中返回参数表，否则 undefined */
+function matchSegments(patternPath: string, actualPath: string): Record<string, string> | undefined {
+  const patternSegments = patternPath.split('/');
+  const actualSegments = actualPath.split('/');
+  if (patternSegments.length !== actualSegments.length) return undefined;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < patternSegments.length; i++) {
+    if (patternSegments[i].startsWith(':')) {
+      params[patternSegments[i].slice(1)] = actualSegments[i];
+    } else if (patternSegments[i] !== actualSegments[i]) {
+      return undefined;
+    }
+  }
+  return params;
+}
+
+/** 两条路径是否形状冲突：段数一致，且每对段中至少一个为参数段或字面量相等 */
+function shapesConflict(a: string, b: string): boolean {
+  const as = a.split('/');
+  const bs = b.split('/');
+  if (as.length !== bs.length) return false;
+  return as.every((segment, i) => segment.startsWith(':') || bs[i].startsWith(':') || segment === bs[i]);
+}
 
 export class RouteRegistry extends EventEmitter {
   private readonly services = new Map<string, Service>();
@@ -115,7 +140,7 @@ export class RouteRegistry extends EventEmitter {
 
   update(
     id: string,
-    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate'>>,
+    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud'>>,
   ): { ok: true; route: Route } | { ok: false; error: 'not-found' } | { ok: false; error: 'conflict'; conflict: Route } {
     const current = [...this.routes.values()].find((r) => r.id === id);
     if (!current) return { ok: false, error: 'not-found' };
@@ -127,22 +152,46 @@ export class RouteRegistry extends EventEmitter {
       id: current.id,
       createdAt: current.createdAt,
     };
-    const nextKey = RouteRegistry.key(next.serviceId, next.method, next.path);
-    const occupant = this.routes.get(nextKey);
-    if (occupant && occupant.id !== id) {
-      return { ok: false, error: 'conflict', conflict: occupant };
+    /* 形状冲突检查（含精确 key 占用，且覆盖路径参数互撞） */
+    const shapeConflict = this.findShapeConflict(next.serviceId, next.method, next.path, id);
+    if (shapeConflict) {
+      return { ok: false, error: 'conflict', conflict: shapeConflict };
     }
 
     this.routes.delete(RouteRegistry.key(current.serviceId, current.method, current.path));
-    this.routes.set(nextKey, next);
+    this.routes.set(RouteRegistry.key(next.serviceId, next.method, next.path), next);
     this.emit('change');
     return { ok: true, route: next };
   }
 
   /** 精确查找（跳过已禁用的路由，禁用视为未注册） */
   find(serviceId: string, method: string, path: string): Route | undefined {
-    const route = this.routes.get(RouteRegistry.key(serviceId, method, path));
-    return route?.disabled ? undefined : route;
+    return this.findWithParams(serviceId, method, path)?.route;
+  }
+
+  /** 查找路由并提取路径参数：先精确匹配，再按段匹配 :param 模式路由（均跳过禁用） */
+  findWithParams(serviceId: string, method: string, path: string): { route: Route; params: Record<string, string> } | undefined {
+    const upper = method.toUpperCase();
+    const exact = this.routes.get(RouteRegistry.key(serviceId, upper, path));
+    if (exact && !exact.disabled) return { route: exact, params: {} };
+    const actualSegments = path.split('/');
+    for (const route of this.routes.values()) {
+      if (route.serviceId !== serviceId || route.method !== upper || route.disabled) continue;
+      if (!route.path.includes(':')) continue;
+      const params = matchSegments(route.path, path);
+      if (params) return { route, params };
+    }
+    return undefined;
+  }
+
+  /** 形状冲突查找：与目标 path 存在匹配空间重叠的其他路由（excludeId 用于 update 排除自身） */
+  findShapeConflict(serviceId: string, method: string, path: string, excludeId?: string): Route | undefined {
+    const upper = method.toUpperCase();
+    for (const route of this.routes.values()) {
+      if (route.serviceId !== serviceId || route.method !== upper || route.id === excludeId) continue;
+      if (shapesConflict(route.path, path)) return route;
+    }
+    return undefined;
   }
 
   /** 不过滤禁用状态的查找（默认路由播种 / 管理场景用，避免禁用后被重新播种） */
@@ -169,6 +218,6 @@ export class RouteRegistry extends EventEmitter {
   }
 
   toJSON(): PersistedState {
-    return { version: 1, services: this.listServices(), routes: this.list(), settings: { ...this.settings } };
+    return { version: SCHEMA_VERSION, services: this.listServices(), routes: this.list(), settings: { ...this.settings } };
   }
 }

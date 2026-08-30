@@ -65,11 +65,18 @@ export interface Route {
   jitterMs?: number;
   /** 故障注入概率百分比（0-100），命中时返回 500 */
   failureRate?: number;
+  /** 序列响应：按命中次序循环返回（优先于场景集/变体/默认响应，requireMatch 门槛之后） */
+  sequence?: Array<{ status: number; body: unknown }>;
+  /** 有状态 CRUD：路径需含 :id 参数段，服务内存维护资源集合（重启清空） */
+  crud?: boolean;
   createdAt: number;
 }
 
+/** 配置文件当前 schema 版本（loadState/toJSON 统一引用，升版本时在此递增并扩展 migrate） */
+export const SCHEMA_VERSION = 2;
+
 export interface PersistedState {
-  version: 1;
+  version: 2;
   services: Service[];
   routes: Route[];
   /** 全局设置（缺省兜底为空对象） */

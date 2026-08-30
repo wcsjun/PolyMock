@@ -106,3 +106,43 @@ describe('renderTemplate', () => {
     expect(template).toEqual(snapshot);
   });
 });
+
+describe('路径参数与假数据函数族', () => {
+  it('params 占位符替换；缺失时原样保留', () => {
+    const ctx = makeContext({ params: { id: '42' } });
+    expect(renderTemplate({ id: '{{params.id}}', miss: '{{params.name}}' }, ctx)).toEqual({
+      id: '42',
+      miss: '{{params.name}}',
+    });
+  });
+
+  it('假数据函数族输出格式正确', () => {
+    const out = renderTemplate(
+      {
+        name: '{{$name}}',
+        ename: '{{$ename}}',
+        email: '{{$email}}',
+        phone: '{{$phone}}',
+        city: '{{$city}}',
+        word: '{{$word}}',
+        bool: '{{$bool}}',
+      },
+      makeContext(),
+    ) as Record<string, string>;
+    expect(out.name).toMatch(/^[\u4e00-\u9fa5]{2,4}$/);
+    expect(out.ename).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    expect(out.email).toMatch(/^[a-z]+\.\d{4}@example\.com$/);
+    expect(out.phone).toMatch(/^1[3-9]\d{9}$/);
+    expect(out.city.length).toBeGreaterThan(0);
+    expect(out.word.length).toBeGreaterThan(0);
+    expect(['true', 'false']).toContain(out.bool);
+  });
+
+  it('假数据占位符多次渲染可产生不同值（存在随机性）', () => {
+    const values = new Set<string>();
+    for (let i = 0; i < 20; i++) {
+      values.add(renderTemplate('{{$int(1,999999)}}', makeContext()) as string);
+    }
+    expect(values.size).toBeGreaterThan(1);
+  });
+});

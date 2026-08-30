@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadState, saveState } from './store.js';
-import type { PersistedState } from './types.js';
+import { SCHEMA_VERSION, type PersistedState } from './types.js';
 
-const EMPTY: PersistedState = { version: 1, services: [], routes: [] };
+const EMPTY: PersistedState = { version: SCHEMA_VERSION, services: [], routes: [] };
 
 const tmpDirs: string[] = [];
 
@@ -95,13 +95,54 @@ describe('loadState', () => {
     );
     expect(loadState(file).settings).toBeUndefined();
   });
+
+  it('version 1 配置迁移到 version 2 且数据保留', () => {
+    const file = path.join(makeTmpDir(), 'config.json');
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        services: [{ id: 'a', name: '服务A', port: 9001, createdAt: 1 }],
+        routes: [
+          {
+            id: 'r',
+            serviceId: 'a',
+            protocol: 'http',
+            method: 'GET',
+            path: '/api/legacy',
+            response: { status: 200, body: { legacy: true } },
+            createdAt: 2,
+          },
+        ],
+        settings: { activeVariant: '旧场景' },
+      }),
+    );
+    const state = loadState(file);
+    expect(state.version).toBe(2);
+    expect(state.services).toHaveLength(1);
+    expect(state.services[0]).toMatchObject({ id: 'a', name: '服务A', port: 9001 });
+    expect(state.routes).toHaveLength(1);
+    expect(state.routes[0]).toMatchObject({ path: '/api/legacy', response: { status: 200, body: { legacy: true } } });
+    expect(state.settings).toEqual({ activeVariant: '旧场景' });
+  });
+
+  it('version 缺失或非法时按旧版本处理并迁移到 version 2', () => {
+    const file = path.join(makeTmpDir(), 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ services: [{ id: 'a', name: '服务A', port: 9001, createdAt: 1 }], routes: [] }));
+    const missing = loadState(file);
+    expect(missing.version).toBe(2);
+    expect(missing.services).toHaveLength(1);
+
+    fs.writeFileSync(file, JSON.stringify({ version: 'oops', services: [], routes: [] }));
+    expect(loadState(file).version).toBe(2);
+  });
 });
 
 describe('saveState', () => {
   it('写入后可完整读回', () => {
     const file = path.join(makeTmpDir(), 'config.json');
     const state: PersistedState = {
-      version: 1,
+      version: SCHEMA_VERSION,
       services: [{ id: 'a', name: '服务A', port: 9001, createdAt: 1 }],
       routes: [],
     };
