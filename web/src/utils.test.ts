@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCurl,
+  isTemplateJsonValid,
   buildFetchSnippet,
   bodyRowsToJsonValue,
   buildRouteRequest,
@@ -202,5 +203,25 @@ describe('sequenceToDraftText', () => {
       { status: 500, body: { ok: false } },
     ]);
     expect(sequenceToDraftText(undefined)).toBe('[]');
+  });
+});
+
+describe('isTemplateJsonValid', () => {
+  it('合法 JSON 直接通过', () => {
+    expect(isTemplateJsonValid('{"code": 0}')).toBe(true);
+    expect(isTemplateJsonValid('')).toBe(true);
+  });
+
+  it('值位置占位符经容忍解析通过', () => {
+    expect(isTemplateJsonValid('{"code": {{params.code}}}')).toBe(true);
+  });
+
+  it('字符串内占位符（本身已是合法 JSON）通过', () => {
+    expect(isTemplateJsonValid('{"code": "{{params.code}}"}')).toBe(true);
+  });
+
+  it('结构破坏的文本不通过', () => {
+    expect(isTemplateJsonValid('{"code": {{params.code')).toBe(false);
+    expect(isTemplateJsonValid('not json')).toBe(false);
   });
 });

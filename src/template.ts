@@ -126,6 +126,53 @@ function renderString(text: string, ctx: TemplateContext): string {
   });
 }
 
+/** 文本级模板渲染：字符串内的占位符注入文本，值位置的占位符注入 JSON 字面量（非字面量值注入带引号字符串） */
+export function renderTemplateText(text: string, ctx: TemplateContext): string {
+  let out = '';
+  let inString = false;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    /* 字符串内的转义序列原样保留 */
+    if (inString && ch === '\\') {
+      out += text.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '{' && text[i + 1] === '{') {
+      const end = text.indexOf('}}', i + 2);
+      if (end !== -1) {
+        const expr = text.slice(i + 2, end).trim();
+        const value = resolveExpr(expr, ctx);
+        if (value === undefined) {
+          out += text.slice(i, end + 2);
+        } else if (inString) {
+          out += value;
+        } else {
+          /* 值位置：值本身是合法 JSON 字面量（数字/布尔/null/JSON）则原样注入，否则注入带引号字符串 */
+          try {
+            JSON.parse(value);
+            out += value;
+          } catch {
+            out += JSON.stringify(value);
+          }
+        }
+        i = end + 2;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /** 深度渲染响应体；非字符串叶子与结构原样返回（不突变入参） */
 export function renderTemplate(body: unknown, ctx: TemplateContext): unknown {
   if (typeof body === 'string') return renderString(body, ctx);

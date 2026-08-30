@@ -6,6 +6,7 @@ import {
   buildRouteRequest,
   bodyRowsToJsonValue,
   formatBody,
+  isTemplateJsonValid,
   jsonValueToBodyRows,
   parseSequenceDraft,
   sequenceToDraftText,
@@ -53,7 +54,7 @@ const BODY_COND_PLACEHOLDER = `{
 
 /* 响应 body 模板说明（含 {{ }} 字面量，须经 :title 绑定常量，避免被模板插值解析） */
 const TEMPLATE_HINT_TITLE =
-  'body 字符串支持：{{query.参数名}} {{header.头名}} {{body.点路径}} {{$id}} 自增 {{$now}} 当前时间 {{$int(1,99)}} 随机整数';
+  'body 字符串支持：{{query.参数名}} {{header.头名}} {{body.点路径}} {{params.参数名}} {{$id}} 自增 {{$now}} 当前时间 {{$int(1,99)}} 随机整数；占位符可直接作为 JSON 值使用（按渲染结果类型注入）';
 
 /* 路径参数提示（含 {{ }} 字面量，同上须经常量绑定渲染） */
 const PATH_PARAM_HINT = '支持 :参数 段，如 /api/users/:id，响应模板可用 {{params.id}}';
@@ -312,16 +313,16 @@ function isValidJson(text: string): boolean {
 function ensureJson(text: string, label: string, markInvalid: () => void): boolean {
   const raw = text.trim();
   if (!raw) return true;
-  if (isValidJson(raw)) return true;
+  if (isTemplateJsonValid(raw)) return true;
   markInvalid();
-  props.notify(`${label} 不是合法的 JSON`, 'err');
+  props.notify(`${label} 不是合法的 JSON${raw.includes('{{') ? '（含占位符时需为合法 JSON 结构，如 {"code": {{params.code}}}）' : ''}`, 'err');
   return false;
 }
 
 /** body 失焦时即时校验，非法标红 */
 function validateBodyText(scene: SceneDraft) {
   const raw = scene.bodyText.trim();
-  scene.invalid = raw ? !isValidJson(raw) : false;
+  scene.invalid = raw ? !isTemplateJsonValid(raw) : false;
 }
 
 /** body 输入过程中仅在标红状态下复检，便于即时消除错误 */
@@ -344,6 +345,11 @@ function formatBodyText() {
   const scene = activeScene.value;
   const raw = scene.bodyText.trim();
   if (!raw) return;
+  if (raw.includes('{{')) {
+    scene.invalid = !isTemplateJsonValid(raw);
+    props.notify('含模板占位符的 body 不做格式化，占位符会原样保留', 'warn');
+    return;
+  }
   try {
     scene.bodyText = JSON.stringify(JSON.parse(raw), null, 2);
     scene.invalid = false;

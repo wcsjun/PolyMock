@@ -92,12 +92,20 @@ function parseRouteRequest(raw: unknown): ParseResult<RouteRequest> {
   return { ok: true, value: result };
 }
 
-/** 解析响应体：字符串按 JSON 解析，其余透传 */
+/** 解析响应体：字符串按 JSON 解析，其余透传；含模板占位符的文本按「占位符替换为 null」容忍校验，原样存储由渲染层处理 */
 function parseResponseBody(raw: unknown, label: string): ParseResult<unknown> {
   if (typeof raw !== 'string') return { ok: true, value: raw };
   try {
     return { ok: true, value: JSON.parse(raw) };
   } catch {
+    if (raw.includes('{{')) {
+      try {
+        JSON.parse(raw.replace(/\{\{[^{}]*\}\}/g, 'null'));
+        return { ok: true, value: raw };
+      } catch {
+        /* 原样报错 */
+      }
+    }
     return { ok: false, error: `${label} 的 body 不是合法的 JSON` };
   }
 }

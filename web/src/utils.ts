@@ -165,6 +165,27 @@ export function routeUrl(port: number, path: string): string {
 
 /* ---------- 代码片段生成（卡片复制菜单用） ---------- */
 
+/** 校验响应 body 文本：合法 JSON，或含模板占位符且占位符替换为 null 后为合法 JSON（值位置占位符场景） */
+export function isTemplateJsonValid(text: string): boolean {
+  const raw = text.trim();
+  if (!raw) return true;
+  try {
+    JSON.parse(raw);
+    return true;
+  } catch {
+    /* 尝试模板容忍解析 */
+  }
+  if (raw.includes('{{')) {
+    try {
+      JSON.parse(raw.replace(/\{\{[^{}]*\}\}/g, 'null'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 /** 生成 curl 片段；GET/HEAD 省略 -X（curl 默认即 GET） */
 export function buildCurl(url: string, method: string): string {
   return method === 'GET' || method === 'HEAD' ? `curl '${url}'` : `curl -X ${method} '${url}'`;

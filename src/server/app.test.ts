@@ -784,6 +784,37 @@ describe('createApp 集成测试', () => {
     expect(patched.route?.delayMs).toBe(0);
   });
 
+  it('模板占位符可出现在值位置：宽松校验通过，命中按渲染类型返回', async () => {
+    const created = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '值位置模板',
+        method: 'GET',
+        path: '/api/tpl-value/:code',
+        response: { status: 200, body: '{"code": {{params.code}}, "note": "{{params.code}}"}' },
+      }),
+    });
+    expect(created.status).toBe(201);
+
+    const hit = await fetch(`${server.baseUrl}/api/tpl-value/200`);
+    expect(hit.status).toBe(200);
+    /* 值位置的占位符按渲染结果类型注入（数字保持数字），字符串内的注入为文本 */
+    expect(await hit.json()).toEqual({ code: 200, note: '200' });
+
+    const bad = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '坏模板',
+        method: 'GET',
+        path: '/api/tpl-broken',
+        response: { status: 200, body: '{"code": {{params.code' },
+      }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
   it('路径参数路由：段匹配提取参数并渲染 {{params.id}}，形状冲突返回 409', async () => {
     await registerRoute({
       name: '用户详情',

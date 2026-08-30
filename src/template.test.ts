@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderTemplate, type TemplateContext } from './template.js';
+import { renderTemplate, renderTemplateText, type TemplateContext } from './template.js';
 
 function makeContext(overrides: Partial<TemplateContext> = {}): TemplateContext {
   let id = 0;
@@ -144,5 +144,25 @@ describe('路径参数与假数据函数族', () => {
       values.add(renderTemplate('{{$int(1,999999)}}', makeContext()) as string);
     }
     expect(values.size).toBeGreaterThan(1);
+  });
+});
+
+describe('renderTemplateText 文本级渲染（值位置占位符）', () => {
+  const ctx = { ...({ query: {}, headers: {}, body: undefined, routeId: 'r', nextId: () => 1 } as TemplateContext), params: { code: '200', id: 'e1' } };
+
+  it('值位置占位符按渲染结果类型注入（数字保持数字）', () => {
+    expect(renderTemplateText('{"code": {{params.code}}}', ctx)).toBe('{"code": 200}');
+  });
+
+  it('非字面量值注入带引号字符串，保证 JSON 合法', () => {
+    expect(renderTemplateText('{"code": {{params.code}}}', { ...ctx, params: { code: 'abc' } })).toBe('{"code": "abc"}');
+  });
+
+  it('字符串内占位符注入文本', () => {
+    expect(renderTemplateText('{"note": "id={{params.id}}"}', ctx)).toBe('{"note": "id=e1"}');
+  });
+
+  it('未识别占位符原样保留', () => {
+    expect(renderTemplateText('{"x": {{params.zz}}}', ctx)).toBe('{"x": {{params.zz}}}');
   });
 });

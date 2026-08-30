@@ -6,7 +6,7 @@ import { createAdminRouter, isHostAllowed } from './admin.js';
 import type { RequestLogStore } from './request-log.js';
 import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
-import { renderTemplate, type TemplateContext } from '../template.js';
+import { renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
 import { DEFAULT_SERVICE_ID } from '../types.js';
 import type { RequestCondition, RouteRequest, RouteResponse, Route } from '../types.js';
 
@@ -468,7 +468,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
 
     // ---- 模板渲染（{{$id}} 使用 app 内共享的路由级计数器）----
     let idCounter = idCounters.get(route.id) ?? 0;
-    const rendered = renderTemplate(result.response.body, {
+    const templateCtx: TemplateContext = {
       query: flattenQuery(req.query as Record<string, unknown>),
       headers: flattenHeaders(req.headers),
       params: routeParams,
@@ -479,7 +479,19 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         idCounters.set(route.id, idCounter);
         return idCounter;
       },
-    } satisfies TemplateContext);
+    };
+    let rendered: unknown;
+    if (typeof result.response.body === 'string' && result.response.body.includes('{{')) {
+      /* 模板文本 body（占位符可出现在值位置）：文本级替换后是合法 JSON 则按 JSON 响应，否则按文本响应 */
+      const text = renderTemplateText(result.response.body, templateCtx);
+      try {
+        rendered = JSON.parse(text);
+      } catch {
+        rendered = text;
+      }
+    } else {
+      rendered = renderTemplate(result.response.body, templateCtx);
+    }
 
     if (result.response.contentType) {
       res.type(result.response.contentType);
