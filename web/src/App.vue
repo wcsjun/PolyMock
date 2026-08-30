@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { deleteRoute, deleteService, fetchRoutes, fetchServices } from './api';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  deleteRoute,
+  deleteService,
+  fetchRoutes,
+  fetchServices,
+  fetchSettings,
+  updateRouteFlags,
+  updateSettings,
+} from './api';
 import EmbedTest from './components/EmbedTest.vue';
+import OpenApiImport from './components/OpenApiImport.vue';
+import RequestLogPanel from './components/RequestLogPanel.vue';
 import RouteForm from './components/RouteForm.vue';
 import ServicePanel from './components/ServicePanel.vue';
 import type { Route, ServiceInfo, ToastKind, ViewName } from './types';
@@ -16,7 +26,7 @@ const POLL_INTERVAL = 15000;
 function readInitialView(): ViewName {
   try {
     const saved = localStorage.getItem(VIEW_KEY);
-    if (saved === 'routes' || saved === 'embed') return saved;
+    if (saved === 'routes' || saved === 'embed' || saved === 'logs') return saved;
   } catch {
     /* 忽略 */
   }
@@ -95,6 +105,7 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 
 onMounted(() => {
   void loadAll();
+  void loadSettings();
   pollTimer = setInterval(() => {
     if (!document.hidden) void loadAll();
   }, POLL_INTERVAL);
@@ -150,14 +161,71 @@ function onFormChanged() {
   closeDrawer();
 }
 
+/* ---------- OpenAPI 导入抽屉 ---------- */
+
+const importOpen = ref(false);
+
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && drawerOpen.value) closeDrawer();
+  if (event.key !== 'Escape') return;
+  if (importOpen.value) {
+    importOpen.value = false;
+    return;
+  }
+  if (drawerOpen.value) closeDrawer();
 }
 
-/* 抽屉打开时锁定背景滚动 */
-watch(drawerOpen, (open) => {
-  document.body.style.overflow = open ? 'hidden' : '';
+/* 任一抽屉打开时锁定背景滚动 */
+watch(
+  () => drawerOpen.value || importOpen.value,
+  (open) => {
+    document.body.style.overflow = open ? 'hidden' : '';
+  },
+);
+
+/* ---------- 接口停用 / 启用 ---------- */
+
+async function toggleDisableRoute(route: Route) {
+  try {
+    await updateRouteFlags(route.id, { disabled: !route.disabled });
+    showToast(`${route.disabled ? '已启用' : '已停用'} ${route.method} ${route.path}`);
+    void loadAll();
+  } catch (err) {
+    showToast((err as Error).message, 'err');
+  }
+}
+
+/* ---------- 全局场景集 ---------- */
+
+const globalVariant = ref('');
+
+/* 当前所有接口的变体名去重列表（routes 变化后自动同步） */
+const variantNames = computed(() => {
+  const names = new Set<string>();
+  for (const route of routes.value) {
+    for (const variant of route.variants ?? []) {
+      if (variant.name) names.add(variant.name);
+    }
+  }
+  return [...names];
 });
+
+async function loadSettings() {
+  try {
+    const data = await fetchSettings();
+    globalVariant.value = data.settings.activeVariant ?? '';
+  } catch {
+    /* 读取失败保持「默认响应」 */
+  }
+}
+
+async function onGlobalVariantChange() {
+  try {
+    await updateSettings({ activeVariant: globalVariant.value || null });
+    showToast('全局场景已切换');
+  } catch (err) {
+    showToast((err as Error).message, 'err');
+  }
+}
 
 async function removeRoute(route: Route) {
   if (!window.confirm(`删除接口 ${route.method} ${route.path}？删除后无法恢复`)) return;
@@ -235,7 +303,24 @@ function onSidebarRzDown(event: PointerEvent) {
           <span class="nav-icon">⛶</span>
           <span>嵌入测试</span>
         </button>
+        <button
+          type="button"
+          class="nav-item"
+          :class="{ active: view === 'logs' }"
+          @click="switchView('logs')"
+        >
+          <span class="nav-icon">≣</span>
+          <span>请求日志</span>
+        </button>
       </nav>
+
+      <div class="variant-box">
+        <label class="variant-label" for="global-variant">全局场景</label>
+        <select id="global-variant" v-model="globalVariant" @change="onGlobalVariantChange">
+          <option value="">默认响应</option>
+          <option v-for="name in variantNames" :key="name" :value="name">{{ name }}</option>
+        </select>
+      </div>
 
       <div class="sidebar-foot">
         <div class="foot-row">
@@ -265,6 +350,9 @@ function onSidebarRzDown(event: PointerEvent) {
       <section id="view-routes" class="view" :hidden="view !== 'routes'">
         <div class="layout">
           <div class="view-toolbar">
+            <button type="button" class="import-openapi-btn" @click="importOpen = true">
+              ⇩ 导入 OpenAPI
+            </button>
             <button type="button" class="add-route-btn" @click="openCreate">
               <span class="submit-plus">＋</span> 新增接口
             </button>
@@ -279,6 +367,7 @@ function onSidebarRzDown(event: PointerEvent) {
             @remove="removeService"
             @edit="editRoute"
             @remove-route="removeRoute"
+            @toggle-disable="toggleDisableRoute"
             @changed="loadAll"
           />
         </div>
@@ -286,6 +375,13 @@ function onSidebarRzDown(event: PointerEvent) {
 
       <!-- 嵌入测试 -->
       <EmbedTest :active="view === 'embed'" :notify="showToast" />
+
+      <!-- 请求日志 -->
+      <section id="view-logs" class="view" :hidden="view !== 'logs'">
+        <div class="layout">
+          <RequestLogPanel :active="view === 'logs'" :notify="showToast" @changed="loadAll" />
+        </div>
+      </section>
     </main>
   </div>
 
@@ -303,5 +399,73 @@ function onSidebarRzDown(event: PointerEvent) {
     </aside>
   </div>
 
+  <!-- OpenAPI 导入抽屉 -->
+  <OpenApiImport
+    v-show="importOpen"
+    :notify="showToast"
+    :services="services"
+    @close="importOpen = false"
+    @imported="loadAll"
+  />
+
   <div v-if="toast.visible" class="toast" :class="toast.kind">{{ toast.message }}</div>
 </template>
+
+<style scoped>
+/* 视图工具条两个按钮的间距 */
+.view-toolbar {
+  gap: 10px;
+}
+
+/* 次要按钮：视觉参考 .cancel-btn */
+.import-openapi-btn {
+  padding: 9px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.import-openapi-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+/* 侧边栏全局场景选择：贴在 sidebar-foot 上方 */
+.variant-box {
+  margin-top: auto;
+  padding: 12px 14px 10px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+}
+
+/* 原底部状态块的 auto 外边距由 variant-box 接管，保持两者贴底 */
+.sidebar-foot {
+  margin-top: 0;
+}
+
+.variant-label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.variant-box select {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+/* 与 sidebar-foot 一致：窄屏下隐藏 */
+@media (max-width: 900px) {
+  .variant-box {
+    display: none;
+  }
+}
+</style>
