@@ -8,3 +8,5 @@ dist/
 !.env.example
 coverage/
 polymock.config.json
+.pnpm-store/
+.zcode/
