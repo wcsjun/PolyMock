@@ -10,3 +10,5 @@ coverage/
 polymock.config.json
 .pnpm-store/
 .zcode/
+e2e/.tmp-polymock.json
+test-results/

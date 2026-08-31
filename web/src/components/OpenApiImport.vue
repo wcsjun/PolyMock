@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { createRoute } from '../api';
+import { parseOpenApi } from '../openapi';
 import type { NotifyFn, ServiceInfo } from '../types';
 
 const props = defineProps<{
@@ -44,120 +45,7 @@ watch(
   { immediate: true },
 );
 
-/* ---------- OpenAPI 文档解析（纯前端，JSON only，无依赖） ---------- */
-
-const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
-const IMPORT_LIMIT = 100;
-const SCHEMA_DEPTH_LIMIT = 10;
-
-interface JsonSchema {
-  $ref?: string;
-  type?: string;
-  format?: string;
-  enum?: unknown[];
-  example?: unknown;
-  default?: unknown;
-  items?: JsonSchema;
-  properties?: Record<string, JsonSchema>;
-}
-
-interface OpenApiOperation {
-  operationId?: string;
-  summary?: string;
-  responses?: Record<string, { content?: Record<string, { schema?: JsonSchema }> }> | undefined;
-}
-
-interface OpenApiDoc {
-  openapi?: unknown;
-  paths?: Record<string, Record<string, OpenApiOperation | undefined> | undefined>;
-}
-
-interface OperationItem {
-  method: string;
-  path: string;
-  name: string;
-  status: number;
-  schema?: JsonSchema;
-}
-
-/** JSON Pointer 解析 $ref（#/components/schemas/...），支持 ~0 ~1 转义 */
-function resolveRef(ref: string, doc: OpenApiDoc): JsonSchema | undefined {
-  if (typeof ref !== 'string' || !ref.startsWith('#/')) return undefined;
-  let node: unknown = doc;
-  for (const raw of ref.slice(2).split('/')) {
-    if (node === null || typeof node !== 'object') return undefined;
-    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
-    node = (node as Record<string, unknown>)[key];
-  }
-  return node && typeof node === 'object' ? (node as JsonSchema) : undefined;
-}
-
-/** 按采样规则由 schema 生成示例值；深度超限 / 循环引用返回 {} */
-function sampleSchema(schema: JsonSchema | undefined, doc: OpenApiDoc, depth: number): unknown {
-  if (!schema || typeof schema !== 'object' || depth > SCHEMA_DEPTH_LIMIT) return {};
-  if (schema.$ref) {
-    const resolved = resolveRef(schema.$ref, doc);
-    return resolved ? sampleSchema(resolved, doc, depth + 1) : {};
-  }
-  if (schema.example !== undefined) return schema.example;
-  if (schema.default !== undefined) return schema.default;
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0];
-  switch (schema.type) {
-    case 'string':
-      return schema.format === 'date' || schema.format === 'date-time'
-        ? new Date().toISOString()
-        : 'string';
-    case 'number':
-    case 'integer':
-      return 0;
-    case 'boolean':
-      return false;
-    case 'array':
-      return [sampleSchema(schema.items, doc, depth + 1)];
-    case 'object': {
-      const obj: Record<string, unknown> = {};
-      for (const [key, child] of Object.entries(schema.properties ?? {})) {
-        obj[key] = sampleSchema(child, doc, depth + 1);
-      }
-      return obj;
-    }
-    default:
-      return {};
-  }
-}
-
-/** 遍历 paths 收集可导入操作；含路径参数的跳过并记录，超过上限截断 */
-function collectOperations(doc: OpenApiDoc): { items: OperationItem[]; truncated: boolean; issues: ImportIssue[] } {
-  const items: OperationItem[] = [];
-  const issues: ImportIssue[] = [];
-  let truncated = false;
-  for (const [path, pathItem] of Object.entries(doc.paths ?? {})) {
-    if (!pathItem || typeof pathItem !== 'object') continue;
-    for (const method of HTTP_METHODS) {
-      const op = pathItem[method];
-      if (!op || typeof op !== 'object') continue;
-      if (path.includes('{')) {
-        issues.push({ method: method.toUpperCase(), path, reason: '暂不支持路径参数' });
-        continue;
-      }
-      if (items.length >= IMPORT_LIMIT) {
-        return { items, truncated: true, issues };
-      }
-      const responses = op.responses ?? {};
-      const resp = responses['200'] || responses['201'] || responses.default;
-      items.push({
-        method: method.toUpperCase(),
-        path,
-        name: op.operationId || op.summary || `${method.toUpperCase()} ${path}`,
-        status: !responses['200'] && responses['201'] ? 201 : 200,
-        schema: resp?.content?.['application/json']?.schema,
-      });
-    }
-  }
-  return { items, truncated, issues };
-}
-
-/* ---------- 导入 ---------- */
+/* ---------- 导入（解析逻辑在 ../openapi.ts，纯函数，可独立单测） ---------- */
 
 function failReport(reason: string) {
   report.value = { ok: 0, issues: [{ method: '-', path: '-', reason }], truncated: false };
@@ -176,39 +64,27 @@ async function startImport() {
     return;
   }
 
-  let doc: OpenApiDoc;
+  let result: ReturnType<typeof parseOpenApi>;
   try {
-    doc = JSON.parse(raw) as OpenApiDoc;
-  } catch {
-    failReport('JSON 解析失败，请检查文档格式');
-    return;
-  }
-  if (!doc || typeof doc !== 'object' || !doc.openapi) {
-    failReport('不是有效的 OpenAPI 文档：缺少 openapi 字段');
+    result = parseOpenApi(raw, { serviceId: serviceId.value });
+  } catch (err) {
+    failReport((err as Error).message);
     return;
   }
 
   importing.value = true;
   try {
-    const { items, truncated, issues } = collectOperations(doc);
+    const issues: ImportIssue[] = [...result.skipped];
     let okCount = 0;
-    for (const item of items) {
-      /* 无 schema 时默认响应体 { message: 'ok' } */
-      const sampled = item.schema ? sampleSchema(item.schema, doc, 0) : { message: 'ok' };
+    for (const item of result.created) {
       try {
-        await createRoute({
-          serviceId: serviceId.value,
-          method: item.method,
-          path: item.path,
-          name: item.name,
-          response: { status: item.status, body: JSON.stringify(sampled, null, 2) },
-        });
+        await createRoute(item.payload);
         okCount += 1;
       } catch (err) {
         issues.push({ method: item.method, path: item.path, reason: (err as Error).message });
       }
     }
-    report.value = { ok: okCount, issues, truncated };
+    report.value = { ok: okCount, issues, truncated: result.truncated };
     props.notify(
       okCount > 0
         ? `导入完成：成功 ${okCount} 条${issues.length ? `，失败/跳过 ${issues.length} 条` : ''}`
@@ -238,7 +114,7 @@ async function startImport() {
             <select id="import-service" v-model="serviceId" class="import-service">
               <option v-for="svc in services" :key="svc.id" :value="svc.id">{{ svc.name }}（:{{ svc.port }}）</option>
             </select>
-            <p class="hint">解析在浏览器本地完成，仅支持 OpenAPI 3 的 JSON 文档；含路径参数的接口暂不支持。</p>
+            <p class="hint">解析在浏览器本地完成，仅支持 OpenAPI 3 的 JSON 文档；路径参数已自动转换为 :param 形式。</p>
           </div>
 
           <div class="field">

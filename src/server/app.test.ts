@@ -515,13 +515,13 @@ describe('createApp 集成测试', () => {
 
   // ---- C1-C8：禁用 / 延迟 / 故障注入 / 模板 / 请求日志 / 场景集 / 代理 ----
 
-  async function putRoute(id: string, payload: Record<string, unknown>): Promise<{ status: number; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number } }> {
+  async function putRoute(id: string, payload: Record<string, unknown>): Promise<{ status: number; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number; sequence?: unknown; crud?: boolean } }> {
     const res = await fetch(`${server.baseUrl}/__polymock/routes/${id}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const body = (await res.json()) as { ok: boolean; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number } };
+    const body = (await res.json()) as { ok: boolean; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number; sequence?: unknown; crud?: boolean } };
     return { status: res.status, route: body.route };
   }
 
@@ -782,5 +782,308 @@ describe('createApp 集成测试', () => {
     const patched = await putRoute(created, { delayMs: 0 });
     expect(patched.status).toBe(200);
     expect(patched.route?.delayMs).toBe(0);
+  });
+
+  it('模板占位符可出现在值位置：宽松校验通过，命中按渲染类型返回', async () => {
+    const created = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '值位置模板',
+        method: 'GET',
+        path: '/api/tpl-value/:code',
+        response: { status: 200, body: '{"code": {{params.code}}, "note": "{{params.code}}"}' },
+      }),
+    });
+    expect(created.status).toBe(201);
+
+    const hit = await fetch(`${server.baseUrl}/api/tpl-value/200`);
+    expect(hit.status).toBe(200);
+    /* 值位置的占位符按渲染结果类型注入（数字保持数字），字符串内的注入为文本 */
+    expect(await hit.json()).toEqual({ code: 200, note: '200' });
+
+    const bad = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '坏模板',
+        method: 'GET',
+        path: '/api/tpl-broken',
+        response: { status: 200, body: '{"code": {{params.code' },
+      }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('路径参数路由：段匹配提取参数并渲染 {{params.id}}，形状冲突返回 409', async () => {
+    await registerRoute({
+      name: '用户详情',
+      method: 'GET',
+      path: '/api/users/:id',
+      response: { status: 200, body: { userId: '{{params.id}}' } },
+    });
+    const hit = await fetch(`${server.baseUrl}/api/users/42`);
+    expect(hit.status).toBe(200);
+    expect(await hit.json()).toEqual({ userId: '42' });
+
+    const dup = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '形状冲突', method: 'GET', path: '/api/users/42', response: { status: 200, body: {} } }),
+    });
+    expect(dup.status).toBe(409);
+
+    const otherShape = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '不同形状', method: 'GET', path: '/api/users/42/posts', response: { status: 200, body: {} } }),
+    });
+    expect(otherShape.status).toBe(201);
+  });
+
+  it('序列响应按次序循环返回并在日志中标注 序列#n', async () => {
+    const id = await registerRoute({
+      name: '序列测试',
+      method: 'GET',
+      path: '/api/seq',
+      response: { status: 200, body: { mode: 'default' } },
+      sequence: [
+        { status: 201, body: { step: 1 } },
+        { status: 200, body: { step: 2 } },
+      ],
+    });
+    const statuses: number[] = [];
+    const steps: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await fetch(`${server.baseUrl}/api/seq`);
+      statuses.push(res.status);
+      steps.push(((await res.json()) as { step: number }).step);
+    }
+    expect(statuses).toEqual([201, 200, 201, 200]);
+    expect(steps).toEqual([1, 2, 1, 2]);
+
+    const logRes = await fetch(`${server.baseUrl}/__polymock/requests?limit=20`);
+    /* /requests 按新→旧排序：时间正序应为 序列#1,#2,#1,#2 */
+    const entries = ((await logRes.json()) as { requests: RequestLogEntry[] }).requests.filter((r) => r.path === '/api/seq');
+    expect(entries.map((e) => e.matched?.variant)).toEqual(['序列#4', '序列#3', '序列#2', '序列#1']);
+    expect(entries[0].matched?.routeId).toBe(id);
+  });
+
+  it('序列响应校验：非法 status 返回 400，空数组可清空', async () => {
+    const bad = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '坏序列', method: 'GET', path: '/api/bad-seq',
+        response: { status: 200, body: {} },
+        sequence: [{ status: 99, body: {} }],
+      }),
+    });
+    expect(bad.status).toBe(400);
+
+    const id = await registerRoute({
+      name: '可清空序列', method: 'GET', path: '/api/clear-seq',
+      response: { status: 200, body: {} },
+      sequence: [{ status: 200, body: { note: 'once' } }],
+    });
+    const cleared = await putRoute(id, { sequence: [] });
+    expect(cleared.status).toBe(200);
+    expect(cleared.route?.sequence).toEqual([]);
+  });
+
+  it('有状态 CRUD：创建/列表/查单条/更新/删除全流程', async () => {
+    await registerRoute({ name: '笔记创建', method: 'POST', path: '/api/notes', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '笔记列表', method: 'GET', path: '/api/notes', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '笔记条目', method: 'GET', path: '/api/notes/:id', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '笔记更新', method: 'PUT', path: '/api/notes/:id', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '笔记删除', method: 'DELETE', path: '/api/notes/:id', crud: true, response: { status: 200, body: {} } });
+
+    const created = await fetch(`${server.baseUrl}/api/notes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'a' }),
+    });
+    expect(created.status).toBe(201);
+    const record = (await created.json()) as { id: string; title: string };
+    expect(record).toEqual({ id: 'rec-1', title: 'a' });
+
+    const list = await fetch(`${server.baseUrl}/api/notes`);
+    expect(((await list.json()) as unknown[]).length).toBe(1);
+
+    const item = await fetch(`${server.baseUrl}/api/notes/rec-1`);
+    expect(item.status).toBe(200);
+    const missing = await fetch(`${server.baseUrl}/api/notes/zz`);
+    expect(missing.status).toBe(404);
+
+    const updated = await fetch(`${server.baseUrl}/api/notes/rec-1`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'b' }),
+    });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toEqual({ id: 'rec-1', title: 'b' });
+
+    const removed = await fetch(`${server.baseUrl}/api/notes/rec-1`, { method: 'DELETE' });
+    expect(removed.status).toBe(200);
+    const gone = await fetch(`${server.baseUrl}/api/notes/rec-1`);
+    expect(gone.status).toBe(404);
+  });
+
+  it('CRUD 校验：crud 需为布尔值；PUT 仅含 crud 字段可作为 patch', async () => {
+    const bad = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏CRUD', method: 'GET', path: '/api/badcrud', crud: 'yes', response: { status: 200, body: {} } }),
+    });
+    expect(bad.status).toBe(400);
+
+    const id = await registerRoute({ name: '条目路由', method: 'GET', path: '/api/items/:id', response: { status: 200, body: {} } });
+    const patched = await putRoute(id, { crud: true });
+    expect(patched.status).toBe(200);
+    expect(patched.route?.crud).toBe(true);
+  });
+
+  it('SSE /events：实时推送请求日志（event: log + 条目 JSON）', async () => {
+    const controller = new AbortController();
+    const sse = await fetch(`${server.baseUrl}/__polymock/events`, { signal: controller.signal });
+    expect(sse.status).toBe(200);
+    expect(sse.headers.get('content-type')).toContain('text/event-stream');
+    expect(sse.headers.get('cache-control')).toContain('no-cache');
+
+    const reader = sse.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    /* 连接建立后触发一次 mock 命中，流中应出现对应日志条目 */
+    await fetch(`${server.baseUrl}/api/hello`);
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !text.includes('event: log')) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 300)),
+      ]);
+      if (chunk === 'timeout') continue;
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    controller.abort();
+    expect(text).toContain('event: log');
+    expect(text).toContain('/api/hello');
+    expect(text).toContain('"matched"');
+  });
+});
+
+describe('安全加固：管理令牌', () => {
+  let registry: RouteRegistry;
+  let manager: ServiceManager;
+  let server: TestServer;
+  let logs: RequestLogStore;
+
+  beforeEach(async () => {
+    registry = new RouteRegistry();
+    registry.addService('默认服务', 8080, DEFAULT_SERVICE_ID);
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', { status: 200, body: { message: 'hi' } });
+    logs = new RequestLogStore();
+    manager = new ServiceManager(registry, { logs });
+    server = await listen(createApp(registry, manager, { mainPort: 8080, logs, adminToken: 'secret-token' }));
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('未携带令牌访问管理 API 返回 401', async () => {
+    const res = await fetch(`${server.baseUrl}/__polymock/routes`);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ ok: false, error: '需要管理令牌（x-polymock-token 头或 ?token= 参数）' });
+  });
+
+  it('令牌错误返回 401，携带正确 x-polymock-token 头返回 200', async () => {
+    const wrong = await fetch(`${server.baseUrl}/__polymock/routes`, { headers: { 'x-polymock-token': 'bad' } });
+    expect(wrong.status).toBe(401);
+
+    const right = await fetch(`${server.baseUrl}/__polymock/routes`, { headers: { 'x-polymock-token': 'secret-token' } });
+    expect(right.status).toBe(200);
+    expect(((await right.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('携带正确 ?token= 查询参数返回 200', async () => {
+    const res = await fetch(`${server.baseUrl}/__polymock/routes?token=secret-token`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('SSE /events 同样受令牌保护：无令牌 401，?token= 可建立事件流', async () => {
+    const denied = await fetch(`${server.baseUrl}/__polymock/events`);
+    expect(denied.status).toBe(401);
+
+    const controller = new AbortController();
+    const allowed = await fetch(`${server.baseUrl}/__polymock/events?token=secret-token`, { signal: controller.signal });
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers.get('content-type')).toContain('text/event-stream');
+    controller.abort();
+  });
+
+  it('未设置 adminToken 时不校验，无令牌访问正常', async () => {
+    const openServer = await listen(createApp(registry, manager, { mainPort: 8080, logs }));
+    try {
+      const res = await fetch(`${openServer.baseUrl}/__polymock/routes`);
+      expect(res.status).toBe(200);
+    } finally {
+      await openServer.close();
+    }
+  });
+});
+
+describe('安全加固：代理白名单', () => {
+  let registry: RouteRegistry;
+  let manager: ServiceManager;
+  let server: TestServer;
+  let logs: RequestLogStore;
+
+  beforeEach(async () => {
+    registry = new RouteRegistry();
+    registry.addService('默认服务', 8080, DEFAULT_SERVICE_ID);
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', { status: 200, body: { message: 'hi' } });
+    logs = new RequestLogStore();
+    manager = new ServiceManager(registry, { logs });
+    server = await listen(createApp(registry, manager, { mainPort: 8080, logs, proxyAllowHosts: ['localhost'] }));
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('PUT proxy 目标 host 不在白名单返回 400，白名单内正常设置', async () => {
+    const blocked = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'http://127.0.0.1:3999' }),
+    });
+    expect(blocked.status).toBe(400);
+    expect(((await blocked.json()) as { error: string }).error).toBe('代理目标不在白名单内');
+
+    const allowed = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/proxy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'http://localhost:3999' }),
+    });
+    expect(allowed.status).toBe(200);
+    expect(((await allowed.json()) as { service: { proxyTarget?: string } }).service.proxyTarget).toBe('http://localhost:3999');
+  });
+
+  it('分发层兜底：非白名单代理目标转发前返回 502 并记日志', async () => {
+    /* 直接更新注册表模拟旧配置中已存在的非白名单代理目标（绕过管理端校验） */
+    registry.updateService(DEFAULT_SERVICE_ID, { proxyTarget: 'http://127.0.0.1:3999' });
+
+    const res = await fetch(`${server.baseUrl}/not-registered`);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ ok: false, error: '代理目标不在白名单内' });
+
+    const logRes = await fetch(`${server.baseUrl}/__polymock/requests`);
+    const body = (await logRes.json()) as { ok: boolean; requests: RequestLogEntry[] };
+    expect(body.ok).toBe(true);
+    expect(body.requests.length).toBeGreaterThan(0);
+    expect(body.requests[0].status).toBe(502);
+    expect(body.requests[0].error).toBe('代理目标不在白名单内');
   });
 });

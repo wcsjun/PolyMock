@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createApp } from './server/app.js';
 import { ServiceManager } from './server/manager.js';
 import { RequestLogStore } from './server/request-log.js';
@@ -7,6 +8,15 @@ import { DEFAULT_SERVICE_ID } from './types.js';
 
 const port = Number(process.env.POLYMOCK_PORT ?? 8080);
 const configFile = process.env.POLYMOCK_CONFIG_FILE ?? 'polymock.config.json';
+
+/* 监听地址：未设置 POLYMOCK_HOST 时保持原行为（监听全部网卡） */
+const host = process.env.POLYMOCK_HOST;
+/* 管理令牌：设置后 /__polymock 全部接口需鉴权（空串视为未设置） */
+const adminToken = process.env.POLYMOCK_ADMIN_TOKEN || undefined;
+/* 代理白名单：逗号分隔 host 列表（如 localhost,127.0.0.1），空串视为未设置 */
+const proxyAllowHosts = process.env.POLYMOCK_PROXY_ALLOW
+  ? process.env.POLYMOCK_PROXY_ALLOW.split(',').map((h) => h.trim()).filter(Boolean)
+  : undefined;
 
 const registry = new RouteRegistry(loadState(configFile));
 registry.on('change', () => saveState(configFile, registry.toJSON()));
@@ -33,10 +43,22 @@ const logs = new RequestLogStore();
 const manager = new ServiceManager(registry, { logs });
 void manager.startAll(registry.listServices().filter((s) => s.id !== DEFAULT_SERVICE_ID));
 
-const app = createApp(registry, manager, { mainPort: port, logs });
-app.listen(port, () => {
+const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts });
+
+/* 回环地址集合：host 为这些值时管理 API 不暴露给外部网络 */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const onListening = () => {
   console.log('PolyMock 已启动');
   console.log(`  Web UI   -> http://localhost:${port}`);
   console.log(`  管理 API -> http://localhost:${port}/__polymock/routes`);
   console.log(`  配置文件 -> ${configFile}`);
-});
+  if (host && !LOOPBACK_HOSTS.has(host) && !adminToken) {
+    console.warn('  警告：管理 API 暴露在非回环地址且未设置管理令牌，存在安全风险');
+  }
+};
+
+if (host) {
+  app.listen(port, host, onListening);
+} else {
+  app.listen(port, onListening);
+}
