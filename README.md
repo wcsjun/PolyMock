@@ -78,6 +78,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 - **比对类型**：`string`（缺省，字符串化比对）/ `number` / `boolean` / `json`（深度相等）/ `array`（包含匹配，实际数组需包含期望 JSON 数组的全部元素，无序）；期望值为空串表示仅要求 key 存在
 - **必填/选填**：条件默认必填，`required: false` 时 key 缺失视为通过（存在才比对）
 - **requireMatch 准入门槛**：开启后所有请求必须满足接口的 `request` 条件，否则返回 400 并说明不匹配原因（优先于任何变体）
+- **路由级认证**：`auth` 配置后模拟后端鉴权，未携带正确凭证返回 401；支持 `apikey`（自定义 header 携带密钥，缺省 `X-API-Key`，可改 header 名）与 `bearer`（`Authorization: Bearer <token>`，401 时附 `WWW-Authenticate: Bearer`）；401 优先于 requireMatch 门槛，CRUD 接口同样生效
 
 ### 响应能力
 
@@ -88,7 +89,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 - **延迟/抖动/故障注入**：`delayMs`（0-60000 固定延迟）+ `jitterMs`（随机抖动上限），`failureRate`（0-100%）按概率返回 500
 - **格式化与即时校验**：body 一键格式化，失焦即时校验 JSON 并标红，提交时后端再次校验
 
-响应解析优先级：`requireMatch` 准入门槛 → 序列响应 → 全局场景集 → 条件变体 → 默认响应。
+响应解析优先级：路由级认证（401）→ `requireMatch` 准入门槛 → 序列响应 → 全局场景集 → 条件变体 → 默认响应。
 
 ### 有状态 CRUD
 

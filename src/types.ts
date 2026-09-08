@@ -6,6 +6,16 @@ export interface RouteResponse {
   body: unknown;
 }
 
+/** 路由级认证配置：模拟后端鉴权，请求未携带正确凭证时返回 401 */
+export interface RouteAuth {
+  /** 认证方式：apikey = 自定义 header 携带密钥；bearer = Authorization: Bearer <token> */
+  type: 'apikey' | 'bearer';
+  /** 期望的密钥 / 令牌值（精确比对） */
+  value: string;
+  /** 仅 apikey 有效：携带密钥的 header 名（缺省 X-API-Key） */
+  header?: string;
+}
+
 /** 条件值比对方式；缺省按 string 字符串化比对（兼容旧数据） */
 export type ConditionType = 'string' | 'number' | 'boolean' | 'json' | 'array';
 
@@ -55,6 +65,8 @@ export interface Route {
   request?: RouteRequest;
   /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则返回 400 */
   requireMatch?: boolean;
+  /** 路由级认证：配置后请求需携带正确凭证（401 优先于 requireMatch 门槛） */
+  auth?: RouteAuth;
   /** 响应变体，按数组顺序优先于默认响应匹配 */
   variants?: ResponseVariant[];
   /** 禁用后不再参与 Mock 匹配（视为未注册，可走代理） */

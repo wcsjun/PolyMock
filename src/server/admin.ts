@@ -10,6 +10,7 @@ import {
   type RequestLogEntry,
   type ResponseVariant,
   type Route,
+  type RouteAuth,
   type RouteRequest,
   type RouteResponse,
   type Service,
@@ -178,6 +179,29 @@ function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' |
     result.crud = source.crud;
   }
   return { ok: true, value: result };
+}
+
+/** 解析路由级认证配置：null 表示清除；type 需为 apikey / bearer，value 需为非空字符串，apikey 可选自定义 header 名 */
+function parseRouteAuth(raw: unknown): ParseResult<RouteAuth | undefined> {
+  if (raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'auth 需为对象（type / value）' };
+  }
+  const source = raw as Record<string, unknown>;
+  if (source.type !== 'apikey' && source.type !== 'bearer') {
+    return { ok: false, error: 'auth.type 需为 apikey 或 bearer' };
+  }
+  if (typeof source.value !== 'string' || !source.value.trim()) {
+    return { ok: false, error: 'auth.value 需为非空字符串' };
+  }
+  let header: string | undefined;
+  if (source.header !== undefined) {
+    if (typeof source.header !== 'string' || !source.header.trim()) {
+      return { ok: false, error: 'auth.header 需为非空字符串' };
+    }
+    header = source.header.trim();
+  }
+  return { ok: true, value: { type: source.type, value: source.value, ...(header !== undefined ? { header } : {}) } };
 }
 
 /** 校验 path 段格式：非空段要么为字面量，要么为 :参数名（: 后非空） */
@@ -402,7 +426,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.post('/routes', (req, res) => {
-    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence } = req.body ?? {};
+    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence, auth } = req.body ?? {};
     if (typeof method !== 'string' || typeof routePath !== 'string' || !routePath.startsWith('/')) {
       res.status(400).json({ ok: false, error: 'method 与 path 均为必填字符串，path 需以 / 开头' });
       return;
@@ -449,6 +473,16 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       routeSequence = parsed.value;
     }
 
+    let routeAuth: RouteAuth | undefined;
+    if (auth !== undefined) {
+      const parsed = parseRouteAuth(auth);
+      if (!parsed.ok) {
+        res.status(400).json({ ok: false, error: parsed.error });
+        return;
+      }
+      routeAuth = parsed.value;
+    }
+
     const bodyParsed = parseResponseBody(response?.body, 'response');
     if (!bodyParsed.ok) {
       res.status(400).json({ ok: false, error: bodyParsed.error });
@@ -479,7 +513,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       status: response?.status ?? 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
       body: bodyParsed.value,
-    }, routeName, routeRequest, requireMatch, routeVariants, { ...behaviorParsed.value, sequence: routeSequence });
+    }, routeName, routeRequest, requireMatch, routeVariants, { ...behaviorParsed.value, sequence: routeSequence, auth: routeAuth });
     res.status(201).json({ ok: true, route });
   });
 
@@ -495,8 +529,8 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.put('/routes/:id', (req, res) => {
-    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence } = req.body ?? {};
-    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud'>> = {};
+    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence, auth } = req.body ?? {};
+    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth'>> = {};
 
     if (serviceId !== undefined) {
       if (typeof serviceId !== 'string' || !serviceId) {
@@ -578,6 +612,15 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       }
       patch.sequence = parsed.value;
     }
+    /* 认证：null 表示清除（patch.auth = undefined 覆盖旧值） */
+    if (auth !== undefined) {
+      const parsed = parseRouteAuth(auth);
+      if (!parsed.ok) {
+        res.status(400).json({ ok: false, error: parsed.error });
+        return;
+      }
+      patch.auth = parsed.value;
+    }
     /* 行为字段（disabled / delayMs / jitterMs / failureRate / crud）可单独作为 patch */
     const behaviorParsed = parseBehaviorFields(req.body);
     if (!behaviorParsed.ok) {
@@ -587,7 +630,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     Object.assign(patch, behaviorParsed.value);
 
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud）' });
+      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud / auth）' });
       return;
     }
 

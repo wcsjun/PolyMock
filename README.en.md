@@ -78,6 +78,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 - **Comparison types**: `string` (default, stringified comparison) / `number` / `boolean` / `json` (deep equality) / `array` (containment — the actual array must contain every element of the expected JSON array, order-insensitive); an empty expected value means "the key just needs to exist"
 - **Required/optional**: conditions are required by default; with `required: false` a missing key passes (the value is only compared when present)
 - **requireMatch gate**: when enabled, every request must satisfy the route's `request` conditions or it is rejected with 400 and a reason (takes precedence over any variant)
+- **Route-level auth**: configure `auth` to simulate backend authentication — requests without valid credentials are rejected with 401; supports `apikey` (secret in a custom header, default `X-API-Key`, header name configurable) and `bearer` (`Authorization: Bearer <token>`, with `WWW-Authenticate: Bearer` on 401); 401 takes precedence over the requireMatch gate and applies to CRUD routes too
 
 ### Response capabilities
 
@@ -88,7 +89,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 - **Delay / jitter / fault injection**: `delayMs` (0-60000 fixed delay) + `jitterMs` (random jitter cap), and `failureRate` (0-100%) to return 500 with some probability
 - **Formatting and instant validation**: one-click body formatting, on-blur JSON validation with inline error highlight, and a second server-side validation on submit
 
-Response resolution order: `requireMatch` gate → sequence response → global scene set → conditional variants → default response.
+Response resolution order: route-level auth (401) → `requireMatch` gate → sequence response → global scene set → conditional variants → default response.
 
 ### Stateful CRUD
 
