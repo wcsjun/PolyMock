@@ -8,7 +8,7 @@ import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
 import { renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
 import { DEFAULT_SERVICE_ID } from '../types.js';
-import type { RequestCondition, RouteRequest, RouteResponse, Route } from '../types.js';
+import type { RequestCondition, RouteRequest, RouteResponse, Route, RouteAuth } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
@@ -75,6 +75,23 @@ function asBoolean(value: unknown): boolean | undefined {
   if (value === true || value === 'true') return true;
   if (value === false || value === 'false') return false;
   return undefined;
+}
+
+/** 校验路由级认证（模拟后端鉴权）；通过返回 null，失败返回 401 错误原因 */
+function checkAuth(auth: RouteAuth, req: express.Request): string | null {
+  if (auth.type === 'bearer') {
+    const header = req.get('authorization');
+    if (header === undefined) return '缺少 Authorization 头';
+    const match = /^Bearer\s+(.+)$/i.exec(header);
+    if (!match) return 'Authorization 头需为 Bearer <token> 形式';
+    if (match[1] !== auth.value) return '令牌不正确';
+    return null;
+  }
+  const headerName = auth.header ?? 'X-API-Key';
+  const key = req.get(headerName);
+  if (key === undefined) return `缺少 ${headerName} 头`;
+  if (key !== auth.value) return 'API Key 不正确';
+  return null;
 }
 
 /**
@@ -397,6 +414,19 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
       }
       writeLog();
       return;
+    }
+
+    // ---- 命中：路由级认证校验（模拟后端鉴权；401 优先于 requireMatch 门槛，CRUD 路由同样生效）----
+    if (route.auth) {
+      const authError = checkAuth(route.auth, req);
+      if (authError) {
+        status = 401;
+        error = `认证失败：${authError}`;
+        if (route.auth.type === 'bearer') res.set('WWW-Authenticate', 'Bearer');
+        res.status(401).json({ ok: false, error });
+        writeLog();
+        return;
+      }
     }
 
     // ---- 命中：有状态 CRUD 路由（requireMatch 门槛仍生效，延迟/故障同样作用）----

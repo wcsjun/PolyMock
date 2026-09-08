@@ -147,6 +147,7 @@ function openInBrowser() {
       <span>application/json</span>
       <span v-if="variants.length" class="route-chip">{{ variants.length }} 个变体</span>
       <span v-if="route.requireMatch" class="route-chip guard">需匹配</span>
+      <span v-if="route.auth" class="route-chip guard">认证 {{ route.auth.type === 'bearer' ? 'Bearer' : 'APIKey' }}</span>
       <span v-if="route.disabled" class="route-chip off">已停用</span>
       <span v-if="route.delayMs" class="route-chip">延迟 {{ route.delayMs }}ms</span>
       <span v-if="route.jitterMs" class="route-chip">抖动 ±{{ route.jitterMs }}ms</span>

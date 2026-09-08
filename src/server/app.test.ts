@@ -490,6 +490,121 @@ describe('createApp 集成测试', () => {
     expect(((await badRequired.json()) as { error: string }).error).toContain('required');
   });
 
+  it('路由级认证：apikey/bearer 凭证校验生效，未配置接口不受影响', async () => {
+    await registerRoute({
+      name: 'apikey 接口',
+      method: 'GET',
+      path: '/api/apikey',
+      response: { body: { ok: true } },
+      auth: { type: 'apikey', value: 'sk-123' },
+    });
+    await registerRoute({
+      name: '自定义头接口',
+      method: 'GET',
+      path: '/api/apikey-custom',
+      response: { body: { ok: true } },
+      auth: { type: 'apikey', value: 'ck-456', header: 'X-Custom-Key' },
+    });
+    await registerRoute({
+      name: 'bearer 接口',
+      method: 'GET',
+      path: '/api/bearer',
+      response: { body: { ok: true } },
+      auth: { type: 'bearer', value: 'tk-789' },
+    });
+
+    /* 正确凭证放行 */
+    const okApikey = await fetch(`${server.baseUrl}/api/apikey`, { headers: { 'X-API-Key': 'sk-123' } });
+    expect(okApikey.status).toBe(200);
+    const okCustom = await fetch(`${server.baseUrl}/api/apikey-custom`, { headers: { 'X-Custom-Key': 'ck-456' } });
+    expect(okCustom.status).toBe(200);
+    const okBearer = await fetch(`${server.baseUrl}/api/bearer`, { headers: { Authorization: 'Bearer tk-789' } });
+    expect(okBearer.status).toBe(200);
+
+    /* 缺失凭证 → 401 + JSON 错误体 */
+    const missing = await fetch(`${server.baseUrl}/api/apikey`);
+    expect(missing.status).toBe(401);
+    expect(((await missing.json()) as { ok: boolean; error: string }).error).toContain('缺少');
+
+    /* 错误凭证 → 401 */
+    const wrong = await fetch(`${server.baseUrl}/api/apikey`, { headers: { 'X-API-Key': 'bad' } });
+    expect(wrong.status).toBe(401);
+
+    /* bearer：缺失 → 401 + WWW-Authenticate 头 */
+    const noAuth = await fetch(`${server.baseUrl}/api/bearer`);
+    expect(noAuth.status).toBe(401);
+    expect(noAuth.headers.get('www-authenticate')).toBe('Bearer');
+
+    /* bearer：非 Bearer 形式 / 错误 token → 401 */
+    const badForm = await fetch(`${server.baseUrl}/api/bearer`, { headers: { Authorization: 'Basic dXNlcg==' } });
+    expect(badForm.status).toBe(401);
+    const badToken = await fetch(`${server.baseUrl}/api/bearer`, { headers: { Authorization: 'Bearer wrong' } });
+    expect(badToken.status).toBe(401);
+
+    /* 未配置认证的接口行为不变 */
+    const plain = await fetch(`${server.baseUrl}/api/hello`);
+    expect(plain.status).toBe(200);
+  });
+
+  it('路由级认证：401 优先于 requireMatch 的 400，PUT auth:null 可清除', async () => {
+    const id = await registerRoute({
+      name: '门槛+认证接口',
+      method: 'GET',
+      path: '/api/gate-auth',
+      requireMatch: true,
+      request: { headers: [{ key: 'X-Token', value: 'abc' }] },
+      response: { body: { ok: true } },
+      auth: { type: 'apikey', value: 'sk-1' },
+    });
+
+    /* 无凭证且无 X-Token：401 优先于 400 */
+    const unauth = await fetch(`${server.baseUrl}/api/gate-auth`);
+    expect(unauth.status).toBe(401);
+
+    /* 有凭证但缺 X-Token：落入 requireMatch 400 */
+    const gated = await fetch(`${server.baseUrl}/api/gate-auth`, { headers: { 'X-API-Key': 'sk-1' } });
+    expect(gated.status).toBe(400);
+
+    /* 凭证与门槛齐备：200 */
+    const both = await fetch(`${server.baseUrl}/api/gate-auth`, { headers: { 'X-API-Key': 'sk-1', 'X-Token': 'abc' } });
+    expect(both.status).toBe(200);
+
+    /* PUT auth:null 清除后：带门槛凭证可访问（认证已清除） */
+    const cleared = await fetch(`${server.baseUrl}/__polymock/routes/${id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ auth: null }),
+    });
+    expect(cleared.status).toBe(200);
+    const afterClear = await fetch(`${server.baseUrl}/api/gate-auth`, { headers: { 'X-Token': 'abc' } });
+    expect(afterClear.status).toBe(200);
+    /* 认证已清除但 requireMatch 门槛仍在：缺 X-Token 返回 400 而非 401 */
+    const gateOnly = await fetch(`${server.baseUrl}/api/gate-auth`);
+    expect(gateOnly.status).toBe(400);
+  });
+
+  it('路由级认证：CRUD 路由同样生效；管理 API auth 字段不合法返回 400', async () => {
+    await registerRoute({
+      name: '受保护集合',
+      method: 'GET',
+      path: '/api/crud-sec',
+      crud: true,
+      auth: { type: 'bearer', value: 'tk-c' },
+    });
+    const denied = await fetch(`${server.baseUrl}/api/crud-sec`);
+    expect(denied.status).toBe(401);
+    const allowed = await fetch(`${server.baseUrl}/api/crud-sec`, { headers: { Authorization: 'Bearer tk-c' } });
+    expect(allowed.status).toBe(200);
+
+    const badAuth = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏认证', method: 'GET', path: '/api/bad-auth', auth: { type: 'basic', value: 'x' } }),
+    });
+    expect(badAuth.status).toBe(400);
+    expect(((await badAuth.json()) as { error: string }).error).toContain('auth.type');
+  });
+
   it('管理 API：variants 与 request 参数不合法时返回 400', async () => {
     const badName = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',

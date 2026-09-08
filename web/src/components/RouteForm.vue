@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { createRoute, updateRoute } from '../api';
-import type { ConditionRow, NotifyFn, Route, RoutePayload, ServiceInfo } from '../types';
+import type { ConditionRow, NotifyFn, Route, RouteAuth, RoutePayload, ServiceInfo } from '../types';
 import {
   buildRouteRequest,
   bodyRowsToJsonValue,
@@ -124,6 +124,11 @@ const sequenceInvalid = ref(false);
 /* 有状态 CRUD 开关，随 payload.crud 提交 */
 const crudFlag = ref(false);
 
+/* 路由级认证：none 关闭；apikey = 自定义 header 携带密钥；bearer = Authorization: Bearer <token> */
+const authType = ref<'none' | 'apikey' | 'bearer'>('none');
+const authValue = ref('');
+const authHeader = ref('');
+
 const activeIndex = computed(() => {
   const idx = scenes.value.findIndex((s) => s.localId === activeId.value);
   return idx === -1 ? 0 : idx;
@@ -228,6 +233,11 @@ watch(
       sequenceInvalid.value = false;
       crudFlag.value = route.crud === true;
 
+      /* 路由级认证回填 */
+      authType.value = route.auth?.type ?? 'none';
+      authValue.value = route.auth?.value ?? '';
+      authHeader.value = route.auth?.header ?? '';
+
       scenes.value = [
         def,
         ...(route.variants ?? []).map((v) => {
@@ -262,6 +272,9 @@ function resetForm() {
   sequenceText.value = '';
   sequenceInvalid.value = false;
   crudFlag.value = false;
+  authType.value = 'none';
+  authValue.value = '';
+  authHeader.value = '';
   scenes.value = [defaultScene()];
   activeId.value = DEFAULT_SCENE_ID;
   serviceId.value = props.services.some((s) => s.id === keepService)
@@ -409,6 +422,12 @@ async function submit() {
   const failureVal = parseAdvancedValue(failureRate.value, 100, '故障率 %');
   if (delayVal === null || jitterVal === null || failureVal === null) return;
 
+  /* 认证校验：开启时密钥 / 令牌值必填 */
+  if (authType.value !== 'none' && !authValue.value.trim()) {
+    props.notify('认证密钥 / 令牌值不能为空', 'err');
+    return;
+  }
+
   /* 序列响应：开启时必须解析为合法数组（body 字符串原样提交，由后端解析） */
   let sequencePayload: Array<{ status: number; body: string }> | undefined;
   if (sequenceOn.value) {
@@ -461,6 +480,20 @@ async function submit() {
     } else {
       if (sequencePayload) payload.sequence = sequencePayload;
       if (crudFlag.value) payload.crud = true;
+    }
+    /* 认证：编辑态始终携带（null 表示清除）；新建态仅在开启时携带 */
+    const authPayload: RouteAuth | null =
+      authType.value === 'none'
+        ? null
+        : {
+            type: authType.value,
+            value: authValue.value.trim(),
+            ...(authType.value === 'apikey' && authHeader.value.trim() ? { header: authHeader.value.trim() } : {}),
+          };
+    if (editing) {
+      payload.auth = authPayload;
+    } else if (authPayload) {
+      payload.auth = authPayload;
     }
     if (!editing || routeName) payload.name = routeName;
 
@@ -718,6 +751,25 @@ async function submit() {
           <input id="f-crud" v-model="crudFlag" type="checkbox" class="switch-input">
           <span class="switch-ui" aria-hidden="true"></span>
         </label>
+
+        <!-- 路由级认证：模拟后端鉴权，未携带正确凭证返回 401 -->
+        <div class="field">
+          <label for="f-auth-type">认证方式</label>
+          <select id="f-auth-type" v-model="authType">
+            <option value="none">无认证</option>
+            <option value="apikey">API Key</option>
+            <option value="bearer">Bearer Token</option>
+          </select>
+        </div>
+        <div v-if="authType !== 'none'" class="field">
+          <label for="f-auth-value">密钥 / 令牌值</label>
+          <input id="f-auth-value" v-model="authValue" type="text" placeholder="如 my-secret-key" spellcheck="false">
+          <p class="hint">未携带或错误返回 401</p>
+        </div>
+        <div v-if="authType === 'apikey'" class="field">
+          <label for="f-auth-header">Header 名</label>
+          <input id="f-auth-header" v-model="authHeader" type="text" placeholder="缺省 X-API-Key" spellcheck="false">
+        </div>
       </div>
 
       <div class="form-actions">

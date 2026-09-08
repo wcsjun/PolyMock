@@ -11,7 +11,7 @@ import type {
 import { SCHEMA_VERSION } from './types.js';
 
 /** 路由响应行为字段（禁用/延迟/抖动/故障/序列/CRUD），可通过 add 的 behavior 与 update 的 patch 设置 */
-export type RouteBehavior = Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud'>;
+export type RouteBehavior = Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth'>;
 
 /** 模式路径与实际路径段匹配；命中返回参数表，否则 undefined */
 function matchSegments(patternPath: string, actualPath: string): Record<string, string> | undefined {
@@ -140,7 +140,7 @@ export class RouteRegistry extends EventEmitter {
 
   update(
     id: string,
-    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud'>>,
+    patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth'>>,
   ): { ok: true; route: Route } | { ok: false; error: 'not-found' } | { ok: false; error: 'conflict'; conflict: Route } {
     const current = [...this.routes.values()].find((r) => r.id === id);
     if (!current) return { ok: false, error: 'not-found' };
