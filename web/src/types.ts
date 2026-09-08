@@ -42,13 +42,13 @@ export interface RouteResponse {
 }
 
 /** 条件值比对方式（后端 ConditionType 镜像）；缺省 string 字符串化比对 */
-export type ConditionType = 'string' | 'number' | 'boolean' | 'json';
+export type ConditionType = 'string' | 'number' | 'boolean' | 'json' | 'array';
 
 /** 单条请求匹配条件（key 精确比对，value 字符串化比对） */
 export interface RequestCondition {
   key: string;
   value: string;
-  /** 比对方式；json 表示期望值为 JSON 字面量并做深度相等比对 */
+  /** 比对方式；json 表示期望值为 JSON 字面量并做深度相等比对；array 表示期望值为 JSON 数组字面量并做包含匹配（实际数组需包含全部期望元素，无序） */
   type?: ConditionType;
   /** 必填：请求缺少该 key 即条件失败；false 时 key 缺失视为通过（存在才比对）。缺省 true */
   required?: boolean;

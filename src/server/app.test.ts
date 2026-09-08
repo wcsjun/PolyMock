@@ -472,6 +472,76 @@ describe('createApp 集成测试', () => {
     expect(typedRoute?.variants?.[2].match?.body?.[1]).toMatchObject({ key: 'coupon', required: false });
   });
 
+  it('条件类型：array 包含匹配（无序子集，逐元素深度相等）', async () => {
+    await registerRoute({
+      name: '数组包含接口',
+      method: 'POST',
+      path: '/api/array-type',
+      variants: [
+        {
+          name: '标签包含',
+          match: { body: [{ key: 'tags', value: '["hot","new"]', type: 'array' }] },
+          response: { body: { hit: 'contains' } },
+        },
+        {
+          name: '期望值非数组',
+          match: { body: [{ key: 'tags', value: '"hot"', type: 'array' }] },
+          response: { body: { hit: 'bad-expected' } },
+        },
+        {
+          name: '对象元素包含',
+          match: { body: [{ key: 'users', value: '[{"id":1}]', type: 'array' }] },
+          response: { body: { hit: 'nested' } },
+        },
+      ],
+      response: { status: 200, body: { hit: 'default' } },
+    });
+
+    const post = (body: unknown) =>
+      fetch(`${server.baseUrl}/api/array-type`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    /* 无序包含：实际数组多元素且顺序不同仍命中 */
+    const hit = await post({ tags: ['new', 'free', 'hot'] });
+    expect(await hit.json()).toEqual({ hit: 'contains' });
+
+    /* 缺少任一期望元素 → 不命中；期望值非数组的变体也不命中 → 落入默认 */
+    const miss = await post({ tags: ['hot', 'new2'] });
+    expect(await miss.json()).toEqual({ hit: 'default' });
+
+    /* 逐元素深度相等：包含 {id:1} 对象元素命中 */
+    const nested = await post({ tags: ['x'], users: [{ id: 2 }, { id: 1 }] });
+    expect(await nested.json()).toEqual({ hit: 'nested' });
+
+    /* 实际值不是数组 → 不命中 */
+    const notArray = await post({ tags: 'hot' });
+    expect(await notArray.json()).toEqual({ hit: 'default' });
+
+    /* 空期望数组：任意实际数组均满足包含 */
+    await registerRoute({
+      name: '空数组包含接口',
+      method: 'POST',
+      path: '/api/array-empty',
+      variants: [
+        {
+          name: '空包含',
+          match: { body: [{ key: 'tags', value: '[]', type: 'array' }] },
+          response: { body: { hit: 'empty-ok' } },
+        },
+      ],
+      response: { status: 200, body: { hit: 'default' } },
+    });
+    const emptyHit = await fetch(`${server.baseUrl}/api/array-empty`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tags: [] }),
+    });
+    expect(await emptyHit.json()).toEqual({ hit: 'empty-ok' });
+  });
+
   it('管理 API：条件的 type/required 不合法时返回 400', async () => {
     const badType = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',

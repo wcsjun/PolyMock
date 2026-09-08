@@ -75,7 +75,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 
 - **Path matching**: exact paths plus `:param` segments (e.g. `/api/users/:id`); shape conflicts (including clashing parameter segments) are rejected with 409 at registration time
 - **Condition dimensions**: three groups — query parameters, request headers (case-insensitive), and JSON body dot paths (e.g. `user.id`)
-- **Comparison types**: `string` (default, stringified comparison) / `number` / `boolean` / `json` (deep equality); an empty expected value means "the key just needs to exist"
+- **Comparison types**: `string` (default, stringified comparison) / `number` / `boolean` / `json` (deep equality) / `array` (containment — the actual array must contain every element of the expected JSON array, order-insensitive); an empty expected value means "the key just needs to exist"
 - **Required/optional**: conditions are required by default; with `required: false` a missing key passes (the value is only compared when present)
 - **requireMatch gate**: when enabled, every request must satisfy the route's `request` conditions or it is rejected with 400 and a reason (takes precedence over any variant)
 

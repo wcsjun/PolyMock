@@ -89,10 +89,17 @@ describe('bodyRowsToJsonValue ↔ jsonValueToBodyRows', () => {
     });
   });
 
-  it('number / json 非法值保留原字符串', () => {
-    expect(bodyRowsToJsonValue([row({ key: 'a', value: 'abc', type: 'number' }), row({ key: 'b', value: '{bad', type: 'json' })])).toEqual({
+  it('number / json / array 非法值保留原字符串', () => {
+    expect(bodyRowsToJsonValue([row({ key: 'a', value: 'abc', type: 'number' }), row({ key: 'b', value: '{bad', type: 'json' }), row({ key: 'c', value: 'oops', type: 'array' })])).toEqual({
       a: 'abc',
       b: '{bad',
+      c: 'oops',
+    });
+  });
+
+  it('array 类型按 JSON 数组还原（表格 → JSON 预览）', () => {
+    expect(bodyRowsToJsonValue([row({ key: 'user.tags', value: '["hot", 1]', type: 'array' })])).toEqual({
+      user: { tags: ['hot', 1] },
     });
   });
 

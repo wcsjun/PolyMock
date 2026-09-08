@@ -17,6 +17,7 @@ const TYPES: Array<{ value: ConditionType; label: string }> = [
   { value: 'number', label: 'number' },
   { value: 'boolean', label: 'boolean' },
   { value: 'json', label: 'json' },
+  { value: 'array', label: 'array' },
 ];
 
 function update(index: number, field: keyof ConditionRow, value: string | boolean) {
