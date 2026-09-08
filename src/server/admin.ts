@@ -45,7 +45,7 @@ export function isHostAllowed(target: string, allowHosts: string[]): boolean {
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
-const CONDITION_TYPES: readonly ConditionType[] = ['string', 'number', 'boolean', 'json'];
+const CONDITION_TYPES: readonly ConditionType[] = ['string', 'number', 'boolean', 'json', 'array'];
 
 /** 归一化一组条件行：key trim、过滤空 key 行；数组内对象不合法时报错 */
 function parseConditionList(raw: unknown, label: string): ParseResult<RequestCondition[]> {

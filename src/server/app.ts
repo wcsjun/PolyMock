@@ -81,7 +81,8 @@ function asBoolean(value: unknown): boolean | undefined {
  * 校验单条条件；返回失败原因，通过返回 null。
  * - key 缺失：required 为 false（选填）时通过，否则失败；
  * - 期望值为空串：仅要求 key 存在（存在性匹配）；
- * - type 决定比对方式：string 字符串化比对（缺省）/ number 数值比对 / boolean 布尔比对 / json 深度相等。
+ * - type 决定比对方式：string 字符串化比对（缺省）/ number 数值比对 / boolean 布尔比对 / json 深度相等 /
+ *   array 包含匹配（期望值为 JSON 数组字面量，实际数组需包含其全部元素，无序，逐元素深度相等）。
  */
 function checkCondition(cond: RequestCondition, actual: unknown): string | null {
   if (actual === undefined) {
@@ -111,6 +112,19 @@ function checkCondition(cond: RequestCondition, actual: unknown): string | null 
         return `期望值不是合法 JSON：${expected}`;
       }
       if (!deepEqual(actual, expectedJson)) return mismatch;
+      return null;
+    }
+    case 'array': {
+      let expectedJson: unknown;
+      try {
+        expectedJson = JSON.parse(expected);
+      } catch {
+        return `期望值不是合法 JSON：${expected}`;
+      }
+      if (!Array.isArray(expectedJson)) return `期望值不是 JSON 数组：${expected}`;
+      if (!Array.isArray(actual)) return mismatch;
+      const containsAll = expectedJson.every((item) => actual.some((elem) => deepEqual(elem, item)));
+      if (!containsAll) return mismatch;
       return null;
     }
     default: {

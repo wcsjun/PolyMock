@@ -75,7 +75,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 
 - **路径匹配**：精确路径 + `:param` 路径参数段（如 `/api/users/:id`）；形状冲突（含参数段互撞）在注册时返回 409
 - **条件维度**：query 参数、请求头（大小写不敏感）、JSON body 点路径（如 `user.id`）三组条件
-- **比对类型**：`string`（缺省，字符串化比对）/ `number` / `boolean` / `json`（深度相等）；期望值为空串表示仅要求 key 存在
+- **比对类型**：`string`（缺省，字符串化比对）/ `number` / `boolean` / `json`（深度相等）/ `array`（包含匹配，实际数组需包含期望 JSON 数组的全部元素，无序）；期望值为空串表示仅要求 key 存在
 - **必填/选填**：条件默认必填，`required: false` 时 key 缺失视为通过（存在才比对）
 - **requireMatch 准入门槛**：开启后所有请求必须满足接口的 `request` 条件，否则返回 400 并说明不匹配原因（优先于任何变体）
 

@@ -97,7 +97,7 @@ export function bodyRowsToJsonValue(rows: ConditionRow[]): unknown {
       const num = Number(row.value);
       value = Number.isNaN(num) ? row.value : num;
     } else if (row.type === 'boolean') value = row.value === 'true';
-    else if (row.type === 'json') {
+    else if (row.type === 'json' || row.type === 'array') {
       try {
         value = JSON.parse(row.value);
       } catch {
