@@ -173,6 +173,43 @@ describe('createApp 集成测试', () => {
     expect(await hit.json()).toEqual({ from: 'extra' });
   });
 
+  it('独立端口服务：query 与 body 条件同时校验，JSON 请求体正常解析', async () => {
+    const created = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '独立条件服务', port: freePort }),
+    });
+    expect(created.status).toBe(201);
+    createdServiceId = ((await created.json()) as { service: { id: string } }).service.id;
+
+    await registerRoute({
+      serviceId: createdServiceId,
+      name: '条件接口',
+      method: 'POST',
+      path: '/api/svc-body',
+      request: {
+        query: [{ key: 'id', value: '1' }],
+        body: [{ key: 'user.name', value: 'PolyMock' }],
+      },
+      requireMatch: true,
+      response: { status: 200, body: { ok: true } },
+    });
+
+    /* query 与 body 条件同时满足：命中（此前因独立端口未解析 JSON 请求体而误报 400） */
+    const hit = await fetch(`http://127.0.0.1:${freePort}/api/svc-body?id=1`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user: { name: 'PolyMock' } }),
+    });
+    expect(hit.status).toBe(200);
+    expect(await hit.json()).toEqual({ ok: true });
+
+    /* 请求体缺失：仍按 requireMatch 语义返回 400 */
+    const noBody = await fetch(`http://127.0.0.1:${freePort}/api/svc-body?id=1`, { method: 'POST' });
+    expect(noBody.status).toBe(400);
+    expect(((await noBody.json()) as { error: string }).error).toContain('请求体缺失');
+  });
+
   // ---- B1/B2：请求条件、校验开关与响应变体 ----
 
   interface VariantInput {

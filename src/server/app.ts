@@ -579,6 +579,7 @@ export function createApp(registry: RouteRegistry, manager: ServiceManager, opti
 
 export function createRouteApp(registry: RouteRegistry, serviceId: string, deps?: DispatchDeps): express.Express {
   const app = express();
+  app.use(express.json({ limit: '10mb' }));
   app.use(createDispatch(registry, serviceId, deps));
   return app;
 }
