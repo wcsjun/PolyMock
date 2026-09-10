@@ -23,6 +23,25 @@ export function resolveMainPort(
   return DEFAULT_PORT;
 }
 
+/** 运行模式：port = 各服务独立端口监听（缺省）；path = 所有服务经主端口 basePath 前缀分发（Docker 友好） */
+export type PolyMockMode = 'port' | 'path';
+
+/** 运行模式解析：仅 POLYMOCK_MODE=path 时为路径模式，其余（含未设置/非法值）回退 port */
+export function resolveMode(env: { POLYMOCK_MODE?: string }): PolyMockMode {
+  return env.POLYMOCK_MODE === 'path' ? 'path' : 'port';
+}
+
+/** 路径模式保留前缀：管理 API 与 Web UI 静态资源占用，不可用作服务 basePath */
+export const RESERVED_BASE_PATHS: ReadonlySet<string> = new Set(['__polymock', 'assets']);
+
+/** basePath 合法格式：小写字母或数字开头，仅含小写字母、数字、连字符 */
+export const BASE_PATH_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+/** 服务名转 basePath 候选：小写化、非 [a-z0-9] 连续段折叠为连字符、去首尾连字符；中文等无有效字符时返回空串 */
+export function slugifyBasePath(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 export interface RouteResponse {
   status: number;
   contentType?: string;
@@ -74,6 +93,8 @@ export interface Service {
   createdAt: number;
   /** 代理转发目标（如 http://localhost:3000）：未命中 Mock 接口时转发到该地址；缺省不代理 */
   proxyTarget?: string;
+  /** 路径模式前缀：/{basePath}/** 经主端口分发到该服务；缺省时启动自动补齐（ensureBasePaths） */
+  basePath?: string;
 }
 
 export interface Route {

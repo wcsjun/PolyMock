@@ -7,6 +7,8 @@ const props = defineProps<{
   route: Route;
   index: number;
   port: number;
+  /** 路径模式前缀：提供时 URL 为 http://host:{port}/{basePath}{path} */
+  basePath?: string;
   notify: NotifyFn;
 }>();
 
@@ -47,10 +49,16 @@ function javaEntityClassName(): string {
   return props.route.path.split('/').filter(Boolean).pop() ?? 'Entity';
 }
 
+/** 接口完整 URL：路径模式拼 basePath 前缀，端口模式直连服务端口 */
+function fullUrl(): string {
+  const prefix = props.basePath ? `/${props.basePath}` : '';
+  return routeUrl(props.port, `${prefix}${props.route.path}`);
+}
+
 /** 按菜单项复制对应片段并提示 */
 async function copySnippet(kind: CopyKind) {
   copyMenuOpen.value = false;
-  const url = routeUrl(props.port, props.route.path);
+  const url = fullUrl();
   const text = kind === 'url' ? url
     : kind === 'curl' ? buildCurl(url, props.route.method)
     : kind === 'fetch' ? buildFetchSnippet(url, props.route.method)
@@ -84,7 +92,7 @@ onBeforeUnmount(() => {
 const canOpenInBrowser = computed(() => props.route.method === 'GET');
 
 function openInBrowser() {
-  window.open(routeUrl(props.port, props.route.path), '_blank', 'noopener');
+  window.open(fullUrl(), '_blank', 'noopener');
 }
 </script>
 

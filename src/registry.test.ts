@@ -304,3 +304,89 @@ describe('路径参数匹配与形状冲突', () => {
     expect(restored.find('default', 'GET', '/api/x')?.sequence).toEqual([]);
   });
 });
+
+describe('basePath 管理（路径模式）', () => {
+  it('addService 可携带 basePath，findServiceByBasePath 按前缀查找且排除默认服务', () => {
+    const registry = new RouteRegistry();
+    registry.addService('订单服务', 9001, 'order', 'order');
+    expect(registry.findServiceByBasePath('order')?.id).toBe('order');
+    expect(registry.findServiceByBasePath('nope')).toBeUndefined();
+    expect(registry.findServiceByBasePath('')).toBeUndefined();
+
+    /* 默认服务即使 basePath 同名也不参与前缀匹配 */
+    registry.addService('默认服务', 8080, 'default', 'order');
+    expect(registry.findServiceByBasePath('order')?.id).toBe('order');
+  });
+
+  it('validateBasePathFormat 校验格式与保留前缀', () => {
+    const registry = new RouteRegistry();
+    expect(registry.validateBasePathFormat('order-svc-2')).toBeNull();
+    expect(registry.validateBasePathFormat('')).toContain('basePath');
+    expect(registry.validateBasePathFormat('Order')).toContain('basePath');
+    expect(registry.validateBasePathFormat('-bad')).toContain('basePath');
+    expect(registry.validateBasePathFormat('含中文')).toContain('basePath');
+    expect(registry.validateBasePathFormat('__polymock')).toContain('保留前缀');
+    expect(registry.validateBasePathFormat('assets')).toContain('保留前缀');
+  });
+
+  it('findBasePathConflict 检测服务间重复与默认服务接口首段遮蔽', () => {
+    const registry = new RouteRegistry();
+    registry.addService('默认服务', 8080, 'default');
+    registry.addService('订单服务', 9001, 'order', 'order');
+    registry.add('default', 'GET', '/api/hello', { status: 200, body: {} });
+
+    expect(registry.findBasePathConflict('order')).toContain('已被服务「订单服务」占用');
+    expect(registry.findBasePathConflict('order', 'order')).toBeNull();
+    expect(registry.findBasePathConflict('api')).toContain('与默认服务接口 GET /api/hello');
+    expect(registry.findBasePathConflict('free')).toBeNull();
+  });
+
+  it('ensureBasePaths 为旧配置缺失 basePath 的服务自动补齐并去重', () => {
+    const registry = new RouteRegistry({
+      version: 2,
+      services: [
+        { id: 'default', name: '默认服务', port: 8080, createdAt: 1 },
+        { id: 'a', name: 'Order Service', port: 9001, createdAt: 2 },
+        { id: 'b', name: 'order service', port: 9002, createdAt: 3 },
+        { id: 'c', name: '纯中文名', port: 9003, createdAt: 4 },
+      ],
+      routes: [],
+    });
+    const changed = registry.ensureBasePaths();
+    expect(changed).toBe(true);
+
+    const a = registry.getService('a');
+    const b = registry.getService('b');
+    const c = registry.getService('c');
+    expect(a?.basePath).toBe('order-service');
+    /* 重名服务自动追加序号去重 */
+    expect(b?.basePath).toBe('order-service-2');
+    /* 中文服务名回退 svc-<port> */
+    expect(c?.basePath).toBe('svc-9003');
+
+    /* 幂等：再次调用不再变更 */
+    expect(registry.ensureBasePaths()).toBe(false);
+  });
+
+  it('ensureBasePaths 保留已合法的 basePath，非法值重写为合法', () => {
+    const registry = new RouteRegistry({
+      version: 2,
+      services: [
+        { id: 'default', name: '默认服务', port: 8080, createdAt: 1 },
+        { id: 'a', name: 'A', port: 9001, createdAt: 2, basePath: 'valid' },
+        { id: 'b', name: 'B', port: 9002, createdAt: 3, basePath: '__polymock' },
+      ],
+      routes: [],
+    });
+    expect(registry.ensureBasePaths()).toBe(true);
+    expect(registry.getService('a')?.basePath).toBe('valid');
+    expect(registry.getService('b')?.basePath).toBe('b');
+  });
+
+  it('basePath 随 toJSON 持久化往返', () => {
+    const registry = new RouteRegistry();
+    registry.addService('订单服务', 9001, 'order', 'order');
+    const restored = new RouteRegistry(registry.toJSON());
+    expect(restored.getService('order')?.basePath).toBe('order');
+  });
+});

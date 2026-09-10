@@ -1,4 +1,4 @@
-import type { MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo } from './types';
+import type { MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo } from './types';
 
 /** 管理令牌（可选）：后端设置 POLYMOCK_ADMIN_TOKEN 后，所有管理请求需携带该令牌 */
 export function getAdminToken(): string {
@@ -39,15 +39,31 @@ export function fetchServices(): Promise<{ ok: true; services: ServiceInfo[] }> 
   return api('/__polymock/services');
 }
 
+/** 运行模式元信息：前端据此切换端口/路径两种 UI */
+export function fetchMeta(): Promise<{ ok: true } & MockMeta> {
+  return api('/__polymock/meta');
+}
+
 export function fetchRoutes(): Promise<{ ok: true; routes: Route[] }> {
   return api('/__polymock/routes');
 }
 
-export function createService(name: string, port: number): Promise<OkEnvelope> {
+/** 新增服务：端口模式传 port；路径模式传 basePath（可缺省，后端自动生成） */
+export function createService(name: string, port: number, basePath?: string): Promise<OkEnvelope> {
+  const body = basePath !== undefined ? { name, basePath } : { name, port };
   return api('/__polymock/services', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ name, port }),
+    body: JSON.stringify(body),
+  });
+}
+
+/** 修改服务 basePath 前缀（路径模式） */
+export function updateServiceBasePath(id: string, basePath: string): Promise<OkEnvelope> {
+  return api(`/__polymock/services/${encodeURIComponent(id)}/basePath`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ basePath }),
   });
 }
 

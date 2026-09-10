@@ -4,7 +4,7 @@ import { ServiceManager } from './server/manager.js';
 import { RequestLogStore } from './server/request-log.js';
 import { RouteRegistry } from './registry.js';
 import { loadState, saveState } from './store.js';
-import { DEFAULT_SERVICE_ID, resolveMainPort } from './types.js';
+import { DEFAULT_SERVICE_ID, resolveMainPort, resolveMode } from './types.js';
 
 const configFile = process.env.POLYMOCK_CONFIG_FILE ?? 'polymock.config.json';
 
@@ -16,6 +16,8 @@ const adminToken = process.env.POLYMOCK_ADMIN_TOKEN || undefined;
 const proxyAllowHosts = process.env.POLYMOCK_PROXY_ALLOW
   ? process.env.POLYMOCK_PROXY_ALLOW.split(',').map((h) => h.trim()).filter(Boolean)
   : undefined;
+/* 运行模式：POLYMOCK_MODE=path 时所有服务经主端口 basePath 前缀分发（Docker 友好）；缺省独立端口 */
+const mode = resolveMode(process.env);
 
 const state = loadState(configFile);
 const registry = new RouteRegistry(state);
@@ -23,6 +25,9 @@ registry.on('change', () => saveState(configFile, registry.toJSON()));
 
 /* 主端口：POLYMOCK_PORT > 配置文件 default 服务端口 > DEFAULT_PORT（改端口编辑配置文件即可，无需改源码） */
 const port = resolveMainPort(process.env, state);
+
+/* 旧配置兼容：为缺失/非法 basePath 的非默认服务自动补齐前缀（触发 change 事件落盘） */
+registry.ensureBasePaths();
 
 const defaultService = registry.getService(DEFAULT_SERVICE_ID);
 if (defaultService) {
@@ -44,10 +49,10 @@ if (!registry.findAny(DEFAULT_SERVICE_ID, 'GET', '/api/hello')) {
 }
 
 const logs = new RequestLogStore();
-const manager = new ServiceManager(registry, { logs });
+const manager = new ServiceManager(registry, { logs }, { singlePort: mode === 'path' });
 void manager.startAll(registry.listServices().filter((s) => s.id !== DEFAULT_SERVICE_ID));
 
-const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts });
+const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts, mode });
 
 /* 回环地址集合：host 为这些值时管理 API 不暴露给外部网络 */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -56,6 +61,9 @@ const onListening = () => {
   console.log(`  Web UI   -> http://localhost:${port}`);
   console.log(`  管理 API -> http://localhost:${port}/__polymock/routes`);
   console.log(`  配置文件 -> ${configFile}`);
+  if (mode === 'path') {
+    console.log('  运行模式 -> path（非默认服务按 /{basePath} 前缀经主端口分发）');
+  }
   if (host && !LOOPBACK_HOSTS.has(host) && !adminToken) {
     console.warn('  警告：管理 API 暴露在非回环地址且未设置管理令牌，存在安全风险');
   }

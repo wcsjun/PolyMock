@@ -1309,3 +1309,137 @@ describe('安全加固：代理白名单', () => {
     expect(body.requests[0].error).toBe('代理目标不在白名单内');
   });
 });
+
+describe('路径模式（POLYMOCK_MODE=path）', () => {
+  let registry: RouteRegistry;
+  let manager: ServiceManager;
+  let app: Express;
+  let server: TestServer;
+
+  beforeEach(async () => {
+    registry = new RouteRegistry();
+    registry.addService('默认服务', 8080, DEFAULT_SERVICE_ID);
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', { status: 200, body: { from: 'default' } });
+    manager = new ServiceManager(registry, undefined, { singlePort: true });
+    app = createApp(registry, manager, { mainPort: 8080, mode: 'path' });
+    server = await listen(app);
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('GET /__polymock/meta 返回模式与主端口', async () => {
+    const res = await fetch(`${server.baseUrl}/__polymock/meta`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, mode: 'path', mainPort: 8080 });
+  });
+
+  it('路径模式创建服务免端口并自动生成唯一 basePath', async () => {
+    const res = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '订单服务' }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { ok: boolean; service: { port: number; basePath?: string } };
+    expect(body.ok).toBe(true);
+    expect(body.service.port).toBe(0);
+    expect(body.service.basePath).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+  });
+
+  it('路径模式创建服务：显式 basePath 校验格式与冲突', async () => {
+    const ok = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '订单服务', basePath: 'order' }),
+    });
+    expect(ok.status).toBe(201);
+
+    /* 重复 basePath → 409 */
+    const dup = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '另一服务', basePath: 'order' }),
+    });
+    expect(dup.status).toBe(409);
+
+    /* 保留前缀 → 400 */
+    const reserved = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '又一服务', basePath: '__polymock' }),
+    });
+    expect(reserved.status).toBe(400);
+  });
+
+  it('请求 /{basePath}/api/... 剥离前缀后分发到对应服务', async () => {
+    const create = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '订单服务', basePath: 'order' }),
+    });
+    const { service } = (await create.json()) as { service: { id: string } };
+
+    await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serviceId: service.id, name: '查订单', method: 'GET', path: '/api/orders', response: { status: 200, body: { from: 'order' } } }),
+    });
+
+    /* 前缀内命中 */
+    const hit = await fetch(`${server.baseUrl}/order/api/orders?id=1`);
+    expect(hit.status).toBe(200);
+    expect(await hit.json()).toEqual({ from: 'order' });
+
+    /* 服务内未注册 → 404（由该服务 dispatch 返回） */
+    const miss = await fetch(`${server.baseUrl}/order/api/nope`);
+    expect(miss.status).toBe(404);
+
+    /* 未命中任何前缀 → 走默认服务（主端口根路径） */
+    const fallback = await fetch(`${server.baseUrl}/api/hello`);
+    expect(fallback.status).toBe(200);
+    expect(await fallback.json()).toEqual({ from: 'default' });
+  });
+
+  it('PUT /services/:id/basePath 修改前缀，默认服务拒绝设置', async () => {
+    const create = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '订单服务' }),
+    });
+    const { service } = (await create.json()) as { service: { id: string } };
+
+    const update = await fetch(`${server.baseUrl}/__polymock/services/${service.id}/basePath`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ basePath: 'new-prefix' }),
+    });
+    expect(update.status).toBe(200);
+    expect(((await update.json()) as { service: { basePath?: string } }).service.basePath).toBe('new-prefix');
+
+    /* 默认服务不可设置 basePath */
+    const def = await fetch(`${server.baseUrl}/__polymock/services/${DEFAULT_SERVICE_ID}/basePath`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ basePath: 'default' }),
+    });
+    expect(def.status).toBe(400);
+  });
+
+  it('默认服务新建接口的首段与 basePath 重合时返回 409', async () => {
+    await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '订单服务', basePath: 'order' }),
+    });
+
+    const res = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '被遮蔽接口', method: 'GET', path: '/order/anything', response: { status: 200, body: {} } }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('basePath');
+  });
+});

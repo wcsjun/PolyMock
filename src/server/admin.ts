@@ -5,6 +5,7 @@ import type { RequestLogStore } from './request-log.js';
 import type { RouteRegistry } from '../registry.js';
 import {
   DEFAULT_SERVICE_ID,
+  slugifyBasePath,
   type ConditionType,
   type RequestCondition,
   type RequestLogEntry,
@@ -14,6 +15,7 @@ import {
   type RouteRequest,
   type RouteResponse,
   type Service,
+  type PolyMockMode,
 } from '../types.js';
 
 export interface AdminOptions {
@@ -24,6 +26,8 @@ export interface AdminOptions {
   adminToken?: string;
   /** 代理目标白名单（host 列表）：设置后 PUT proxy 与转发均要求目标 hostname 在白名单内；缺省不校验 */
   proxyAllowHosts?: string[];
+  /** 运行模式：path 时创建服务免端口、按 basePath 前缀区分；缺省 port */
+  mode?: PolyMockMode;
 }
 
 /** 请求日志查询的缺省与上限条数 */
@@ -263,6 +267,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     res.status(401).json({ ok: false, error: '需要管理令牌（x-polymock-token 头或 ?token= 参数）' });
   });
 
+  // ---- 模式元信息（前端双模式适配依据）----
+  router.get('/meta', (_req, res) => {
+    res.json({ ok: true, mode: options.mode ?? 'port', mainPort: options.mainPort });
+  });
+
   // ---- 服务分组管理 ----
   router.get('/services', (_req, res) => {
     res.json({
@@ -272,14 +281,49 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.post('/services', async (req, res) => {
-    const { name, port } = req.body ?? {};
+    const body = req.body ?? {};
+    const { name, port } = body;
     const serviceName = typeof name === 'string' ? name.trim() : '';
-    const servicePort = Number(port);
 
     if (!serviceName) {
       res.status(400).json({ ok: false, error: '服务名称不能为空' });
       return;
     }
+    if (registry.listServices().some((s) => s.name === serviceName)) {
+      res.status(409).json({ ok: false, error: `服务名称「${serviceName}」已存在` });
+      return;
+    }
+
+    /* 路径模式：免端口，按 basePath 前缀区分服务；显式指定时精确校验（不做 slugify 清洗），未指定时按服务名自动生成并去重 */
+    if (options.mode === 'path') {
+      const requested = typeof body.basePath === 'string' ? body.basePath.trim() : '';
+      if (requested) {
+        const formatError = registry.validateBasePathFormat(requested);
+        if (formatError) {
+          res.status(400).json({ ok: false, error: formatError });
+          return;
+        }
+        const conflict = registry.findBasePathConflict(requested);
+        if (conflict) {
+          res.status(409).json({ ok: false, error: conflict });
+          return;
+        }
+        const service = registry.addService(serviceName, 0, undefined, requested);
+        res.status(201).json({ ok: true, service });
+        return;
+      }
+      const base = slugifyBasePath(serviceName) || `svc-${randomUUID().slice(0, 8)}`;
+      let candidate = base;
+      let n = 2;
+      while (registry.validateBasePathFormat(candidate) !== null || registry.findBasePathConflict(candidate) !== null) {
+        candidate = `${base}-${n++}`;
+      }
+      const service = registry.addService(serviceName, 0, undefined, candidate);
+      res.status(201).json({ ok: true, service });
+      return;
+    }
+
+    const servicePort = Number(port);
     if (!Number.isInteger(servicePort) || servicePort < 1 || servicePort > 65535) {
       res.status(400).json({ ok: false, error: '端口需为 1-65535 的整数' });
       return;
@@ -290,10 +334,6 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     }
     if (registry.findServiceByPort(servicePort)) {
       res.status(409).json({ ok: false, error: `端口 ${servicePort} 已被其他服务占用` });
-      return;
-    }
-    if (registry.listServices().some((s) => s.name === serviceName)) {
-      res.status(409).json({ ok: false, error: `服务名称「${serviceName}」已存在` });
       return;
     }
 
@@ -316,6 +356,34 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     }
     await manager.stop(serviceId);
     res.json({ ok: registry.removeService(serviceId) });
+  });
+
+  // ---- 服务 basePath（路径模式前缀）----
+  router.put('/services/:id/basePath', (req, res) => {
+    const serviceId = req.params.id;
+    const service = registry.getService(serviceId);
+    if (!service) {
+      res.status(404).json({ ok: false, error: '服务不存在' });
+      return;
+    }
+    if (serviceId === DEFAULT_SERVICE_ID) {
+      res.status(400).json({ ok: false, error: '默认服务固定占用主端口根路径，不使用 basePath 前缀' });
+      return;
+    }
+    const raw = (req.body as { basePath?: unknown } | undefined)?.basePath;
+    const basePath = typeof raw === 'string' ? raw.trim() : '';
+    const formatError = registry.validateBasePathFormat(basePath);
+    if (formatError) {
+      res.status(400).json({ ok: false, error: formatError });
+      return;
+    }
+    const conflict = registry.findBasePathConflict(basePath, serviceId);
+    if (conflict) {
+      res.status(409).json({ ok: false, error: conflict });
+      return;
+    }
+    registry.updateService(serviceId, { basePath });
+    res.json({ ok: true, service: describeService(registry, manager, registry.getService(serviceId) as Service) });
   });
 
   // ---- 服务代理转发 ----
@@ -452,6 +520,15 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     if (shapeConflict) {
       res.status(409).json({ ok: false, error: `接口 ${method.toUpperCase()} ${routePath} 与已有接口 ${shapeConflict.method} ${shapeConflict.path} 形状冲突` });
       return;
+    }
+    /* 路径模式：默认服务接口首段不可与任何服务 basePath 重合（会被前缀分发遮蔽，永远无法命中） */
+    if (options.mode === 'path' && sid === DEFAULT_SERVICE_ID) {
+      const firstSegment = routePath.split('/').filter(Boolean)[0];
+      const shadowService = firstSegment ? registry.findServiceByBasePath(firstSegment) : undefined;
+      if (shadowService) {
+        res.status(409).json({ ok: false, error: `路径首段 "${firstSegment}" 已被服务「${shadowService.name}」的 basePath 占用，默认服务接口会因此被遮蔽` });
+        return;
+      }
     }
     if (requireMatch !== undefined && typeof requireMatch !== 'boolean') {
       res.status(400).json({ ok: false, error: 'requireMatch 需为布尔值' });

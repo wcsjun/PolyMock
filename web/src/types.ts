@@ -4,6 +4,15 @@ export type ToastKind = 'ok' | 'err' | 'warn';
 
 export type NotifyFn = (message: string, kind?: ToastKind) => void;
 
+/** 运行模式（后端 PolyMockMode 镜像）：port 独立端口；path 主端口 basePath 前缀 */
+export type PolyMockMode = 'port' | 'path';
+
+/** GET /__polymock/meta 返回的运行模式元信息 */
+export interface MockMeta {
+  mode: PolyMockMode;
+  mainPort: number;
+}
+
 /** GET /__polymock/routes 返回的接口定义 */
 export interface Route {
   id: string;
@@ -101,6 +110,8 @@ export interface ServiceInfo {
   count: number;
   /** 代理穿透目标：未命中请求转发到该地址 */
   proxyTarget?: string;
+  /** 路径模式前缀：/{basePath}/** 经主端口分发到该服务 */
+  basePath?: string;
 }
 
 /** 新增/编辑接口时的请求体（body 为原始文本，由后端做 JSON 解析） */

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   deleteRoute,
   deleteService,
+  fetchMeta,
   fetchRoutes,
   fetchServices,
   fetchSettings,
@@ -14,7 +15,7 @@ import OpenApiImport from './components/OpenApiImport.vue';
 import RequestLogPanel from './components/RequestLogPanel.vue';
 import RouteForm from './components/RouteForm.vue';
 import ServicePanel from './components/ServicePanel.vue';
-import type { Route, ServiceInfo, ToastKind, ViewName } from './types';
+import type { PolyMockMode, Route, ServiceInfo, ToastKind, ViewName } from './types';
 
 const VIEW_KEY = 'polymock:view';
 const SIDEBAR_MIN = 120;
@@ -65,6 +66,9 @@ function showToast(message: string, kind: ToastKind = 'ok') {
 
 const services = ref<ServiceInfo[]>([]);
 const routes = ref<Route[]>([]);
+/** 运行模式（后端 /meta 决定）：port 独立端口；path basePath 前缀 */
+const mode = ref<PolyMockMode>('port');
+const mainPort = ref(0);
 const expanded = ref(new Set<string>());
 const statusState = ref<boolean | null>(null); // null=连接中
 const statusText = ref('连接中');
@@ -90,6 +94,9 @@ async function loadRoutes() {
 
 async function loadAll() {
   try {
+    const meta = await fetchMeta();
+    mode.value = meta.mode;
+    mainPort.value = meta.mainPort;
     await loadServices();
     await loadRoutes();
     routeCountText.value = `${routes.value.length} 个接口`;
@@ -362,6 +369,8 @@ function onSidebarRzDown(event: PointerEvent) {
             :services="services"
             :routes="routes"
             :expanded="expanded"
+            :mode="mode"
+            :main-port="mainPort"
             :notify="showToast"
             @toggle="toggleService"
             @remove="removeService"
