@@ -4,9 +4,8 @@ import { ServiceManager } from './server/manager.js';
 import { RequestLogStore } from './server/request-log.js';
 import { RouteRegistry } from './registry.js';
 import { loadState, saveState } from './store.js';
-import { DEFAULT_SERVICE_ID } from './types.js';
+import { DEFAULT_SERVICE_ID, resolveMainPort } from './types.js';
 
-const port = Number(process.env.POLYMOCK_PORT ?? 8080);
 const configFile = process.env.POLYMOCK_CONFIG_FILE ?? 'polymock.config.json';
 
 /* 监听地址：未设置 POLYMOCK_HOST 时保持原行为（监听全部网卡） */
@@ -18,12 +17,17 @@ const proxyAllowHosts = process.env.POLYMOCK_PROXY_ALLOW
   ? process.env.POLYMOCK_PROXY_ALLOW.split(',').map((h) => h.trim()).filter(Boolean)
   : undefined;
 
-const registry = new RouteRegistry(loadState(configFile));
+const state = loadState(configFile);
+const registry = new RouteRegistry(state);
 registry.on('change', () => saveState(configFile, registry.toJSON()));
+
+/* 主端口：POLYMOCK_PORT > 配置文件 default 服务端口 > DEFAULT_PORT（改端口编辑配置文件即可，无需改源码） */
+const port = resolveMainPort(process.env, state);
 
 const defaultService = registry.getService(DEFAULT_SERVICE_ID);
 if (defaultService) {
-  if (defaultService.port !== port) {
+  /* 仅环境变量显式指定时回写配置，保持文件与实际监听端口一致 */
+  if (process.env.POLYMOCK_PORT && defaultService.port !== port) {
     defaultService.port = port;
     registry.emit('change');
   }

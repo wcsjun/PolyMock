@@ -21,22 +21,22 @@
 ```bash
 pnpm install
 pnpm build        # tsc 编译后端到 dist/ + vite 构建前端到 public/
-pnpm start        # 启动后访问 http://localhost:8080
+pnpm start        # 启动后访问 http://localhost:33233
 ```
 
 > `public/` 是前端构建产物，不入库。**克隆后必须先执行 `pnpm build`**，否则访问不到 Web UI。
 
 启动后：
 
-- Web 控制台：<http://localhost:8080>
-- 默认服务 `default` 监听主端口（默认 `8080`），并预置默认路由 `GET /api/hello`
+- Web 控制台：<http://localhost:33233>
+- 默认服务 `default` 监听主端口（出厂 `33233`；**改端口直接编辑 `polymock.config.json` 里 `default` 服务的 `port` 字段，重启生效，无需改源码**），并预置默认路由 `GET /api/hello`
 - 所有变更自动保存到 `polymock.config.json`，重启后恢复
 
 ### 开发模式
 
 ```bash
 pnpm dev          # 后端热启动（tsx watch）
-pnpm dev:web      # 前端 Vite dev server（HMR），/__polymock 代理到 localhost:8080
+pnpm dev:web      # 前端 Vite dev server（HMR），/__polymock 代理自动跟随主端口
 ```
 
 开发模式下 Web UI 走 Vite 地址（默认 <http://localhost:5173>）；Mock 请求本身仍访问主端口或各服务分组端口。
@@ -45,7 +45,7 @@ pnpm dev:web      # 前端 Vite dev server（HMR），/__polymock 代理到 loca
 
 ```bash
 # 注册接口：带请求条件与响应变体
-curl -X POST http://localhost:8080/__polymock/routes \
+curl -X POST http://localhost:33233/__polymock/routes \
   -H "Content-Type: application/json" \
   -d '{
     "name": "订单查询",
@@ -58,8 +58,8 @@ curl -X POST http://localhost:8080/__polymock/routes \
     ]
   }'
 
-curl http://localhost:8080/api/orders                                    # {"role":"default"}
-curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"role":"admin"}
+curl http://localhost:33233/api/orders                                    # {"role":"default"}
+curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"role":"admin"}
 ```
 
 ## 功能清单
@@ -123,7 +123,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 
 ## Web 控制台
 
-启动后浏览器打开 <http://localhost:8080>，左侧边栏切换三个视图（选择会记忆）：
+启动后浏览器打开 <http://localhost:33233>，左侧边栏切换三个视图（选择会记忆）：
 
 | 视图 | 说明 |
 | --- | --- |
@@ -155,13 +155,13 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 
 ## 配置文件
 
-配置持久化在 `polymock.config.json`（路径可通过 `POLYMOCK_CONFIG_FILE` 修改），注册表每次变更自动落盘（临时文件 + rename 原子写）。当前 schema 版本为 `2`：
+配置持久化在 `polymock.config.json`（路径可通过 `POLYMOCK_CONFIG_FILE` 修改），注册表每次变更自动落盘（临时文件 + rename 原子写）。其中 `default` 服务的 `port` 字段就是主端口（Web UI / 管理 API / 默认服务所在）。当前 schema 版本为 `2`：
 
 ```json
 {
   "version": 2,
   "services": [
-    { "id": "default", "name": "默认服务", "port": 8080, "createdAt": 1730000000000 },
+    { "id": "default", "name": "默认服务", "port": 33233, "createdAt": 1730000000000 },
     { "id": "u-9f2c", "name": "用户服务", "port": 8101, "createdAt": 1730000001000, "proxyTarget": "http://localhost:3000" }
   ],
   "routes": [
@@ -197,7 +197,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 | 字段 | 说明 |
 | --- | --- |
 | `version` | schema 版本，当前为 `2` |
-| `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标） |
+| `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；**`default` 服务的 `port` 即主端口，改后重启生效** |
 | `routes[].method` / `path` | HTTP 方法与路径，path 支持 `:param` 参数段 |
 | `routes[].response` | 默认响应：`status` / `contentType?` / `body` |
 | `routes[].request` / `requireMatch` | 预期请求条件与准入开关 |
@@ -212,7 +212,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `POLYMOCK_PORT` | `8080` | 主端口（默认服务与 Web UI / 管理 API 所在） |
+| `POLYMOCK_PORT` | 配置文件 `default` 服务 `port`（出厂 `33233`） | 主端口（默认服务与 Web UI / 管理 API 所在）；优先级高于配置文件，显式设置后会回写同步到配置 |
 | `POLYMOCK_HOST` | 未设置（监听全部网卡） | 监听地址；设置为非回环地址且未配置管理令牌时启动会输出安全警告 |
 | `POLYMOCK_CONFIG_FILE` | `polymock.config.json` | 配置文件路径 |
 | `POLYMOCK_ADMIN_TOKEN` | 未设置（不校验） | 管理令牌，设置后 `/__polymock` 全部接口需鉴权（空串视为未设置） |
@@ -223,7 +223,7 @@ curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"rol
 | 命令 | 作用 |
 | --- | --- |
 | `pnpm dev` | 后端热启动（tsx watch） |
-| `pnpm dev:web` | 前端 Vite dev server（HMR，`/__polymock` 代理到 localhost:8080） |
+| `pnpm dev:web` | 前端 Vite dev server（HMR，`/__polymock` 代理自动跟随主端口，与后端同一解析规则） |
 | `pnpm build` | tsc 编译后端到 `dist/` + vite 构建前端到 `public/` |
 | `pnpm build:web` | 仅构建前端 |
 | `pnpm start` | 运行 `dist/index.js`（需先 `pnpm build`） |
