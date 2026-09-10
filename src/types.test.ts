@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PORT, DEFAULT_SERVICE_ID, resolveMainPort } from './types.js';
+import { DEFAULT_PORT, DEFAULT_SERVICE_ID, resolveMainPort, resolveMode, slugifyBasePath } from './types.js';
 
 describe('resolveMainPort 主端口解析', () => {
   type PortState = Parameters<typeof resolveMainPort>[1];
@@ -52,5 +52,36 @@ describe('主端口解析接线', () => {
     const entry = fs.readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
     expect(entry).toContain('resolveMainPort(process.env, state)');
     expect(entry).not.toContain('?? DEFAULT_PORT');
+  });
+});
+
+describe('resolveMode 运行模式解析', () => {
+  it('POLYMOCK_MODE=path 时为路径模式', () => {
+    expect(resolveMode({ POLYMOCK_MODE: 'path' })).toBe('path');
+  });
+
+  it('未设置或非 path 值回退端口模式', () => {
+    expect(resolveMode({})).toBe('port');
+    expect(resolveMode({ POLYMOCK_MODE: '' })).toBe('port');
+    expect(resolveMode({ POLYMOCK_MODE: 'PATH' })).toBe('port');
+    expect(resolveMode({ POLYMOCK_MODE: 'port' })).toBe('port');
+    expect(resolveMode({ POLYMOCK_MODE: 'unknown' })).toBe('port');
+  });
+});
+
+describe('slugifyBasePath 服务名转前缀', () => {
+  it('小写化并折叠非法字符为连字符', () => {
+    expect(slugifyBasePath('Order Service')).toBe('order-service');
+    expect(slugifyBasePath('用户服务 User API')).toBe('user-api');
+    expect(slugifyBasePath('  --Pay__V2--  ')).toBe('pay-v2');
+  });
+
+  it('纯中文等无有效字符时返回空串', () => {
+    expect(slugifyBasePath('用户服务')).toBe('');
+    expect(slugifyBasePath('***')).toBe('');
+  });
+
+  it('已合法的名称保持不变', () => {
+    expect(slugifyBasePath('order-svc-2')).toBe('order-svc-2');
   });
 });

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { createService, setProxy } from '../api';
-import type { NotifyFn, Route, ServiceInfo } from '../types';
+import { createService, setProxy, updateServiceBasePath } from '../api';
+import type { NotifyFn, PolyMockMode, Route, ServiceInfo } from '../types';
 import RouteCard from './RouteCard.vue';
 
 const props = defineProps<{
   services: ServiceInfo[];
   routes: Route[];
   expanded: Set<string>;
+  mode: PolyMockMode;
+  /** 主端口：路径模式下非默认服务接口 URL 用 mainPort + basePath 拼接 */
+  mainPort: number;
   notify: NotifyFn;
 }>();
 
@@ -38,26 +41,58 @@ function routesOf(serviceId: string): Route[] {
 
 const sName = ref('');
 const sPort = ref<number | ''>('');
+const sBasePath = ref('');
 const adding = ref(false);
 
 async function submitService() {
   const name = sName.value.trim();
-  const port = Number(sPort.value);
 
   if (!name) {
     props.notify('请输入服务名称', 'err');
     return;
   }
-  if (!port || port < 1 || port > 65535) {
-    props.notify('请输入 1-65535 之间的端口', 'err');
-    return;
-  }
 
   try {
-    await createService(name, port);
+    if (props.mode === 'path') {
+      await createService(name, 0, sBasePath.value.trim());
+      props.notify(`已新增服务「${name}」（/${sBasePath.value.trim() || '自动生成前缀'}）`);
+    } else {
+      const port = Number(sPort.value);
+      if (!port || port < 1 || port > 65535) {
+        props.notify('请输入 1-65535 之间的端口', 'err');
+        return;
+      }
+      await createService(name, port);
+      props.notify(`已新增服务「${name}」(:${port})`);
+    }
     sName.value = '';
     sPort.value = '';
-    props.notify(`已新增服务「${name}」(:${port})`);
+    sBasePath.value = '';
+    emit('changed');
+  } catch (err) {
+    props.notify((err as Error).message, 'err');
+  }
+}
+
+/* ---------- basePath 编辑（路径模式） ---------- */
+
+const basePathDrafts = reactive<Record<string, string>>({});
+
+watch(
+  () => props.services,
+  (list) => {
+    for (const svc of list) {
+      if (!(svc.id in basePathDrafts)) basePathDrafts[svc.id] = svc.basePath ?? '';
+    }
+  },
+  { immediate: true },
+);
+
+async function saveBasePath(svc: ServiceInfo) {
+  const basePath = (basePathDrafts[svc.id] ?? '').trim();
+  try {
+    await updateServiceBasePath(svc.id, basePath);
+    props.notify(`已更新「${svc.name}」的 basePath → /${basePath}`);
     emit('changed');
   } catch (err) {
     props.notify((err as Error).message, 'err');
@@ -118,7 +153,8 @@ async function saveProxy(svc: ServiceInfo) {
                 <span class="service-name" :title="svc.name">{{ svc.name }}</span>
                 <span v-if="svc.isDefault" class="service-tag">默认</span>
               </span>
-              <span class="service-port">:{{ svc.port }}</span>
+              <span v-if="mode === 'path' && !svc.isDefault" class="service-port" :title="`路径模式前缀 /${svc.basePath ?? ''}`">/{{ svc.basePath }}</span>
+              <span v-else class="service-port">:{{ svc.port }}</span>
             </span>
             <span class="service-meta">
               <span
@@ -147,12 +183,24 @@ async function saveProxy(svc: ServiceInfo) {
             :key="route.id"
             :route="route"
             :index="i"
-            :port="svc.port"
+            :port="mode === 'path' && !svc.isDefault ? mainPort : svc.port"
+            :base-path="mode === 'path' && !svc.isDefault ? svc.basePath : undefined"
             :notify="notify"
             @edit="emit('edit', $event)"
             @remove="emit('remove-route', $event)"
             @toggle-disable="emit('toggle-disable', $event)"
           />
+        </div>
+        <div v-if="expanded.has(svc.id) && mode === 'path' && !svc.isDefault" class="service-proxy">
+          <input
+            v-model="basePathDrafts[svc.id]"
+            name="basePath"
+            type="text"
+            placeholder="basePath 前缀，如 order（留空恢复自动生成）"
+            spellcheck="false"
+            @keydown.enter.prevent="saveBasePath(svc)"
+          >
+          <button type="button" class="proxy-save" title="保存 basePath 前缀" @click="saveBasePath(svc)">保存</button>
         </div>
         <div v-if="expanded.has(svc.id)" class="service-proxy">
           <input
@@ -170,8 +218,9 @@ async function saveProxy(svc: ServiceInfo) {
 
     <form class="service-form" autocomplete="off" @submit.prevent="submitService">
       <input v-model="sName" name="name" type="text" placeholder="服务名称，如 订单服务" spellcheck="false">
-      <input v-model.number="sPort" name="port" type="number" placeholder="端口，如 3001" min="1" max="65535">
-      <button type="submit" class="svc-add" title="新增服务（独立端口监听）">＋</button>
+      <input v-if="mode === 'path'" v-model="sBasePath" name="basePath" type="text" placeholder="basePath 前缀（可选，如 order）" spellcheck="false">
+      <input v-else v-model.number="sPort" name="port" type="number" placeholder="端口，如 3001" min="1" max="65535">
+      <button type="submit" class="svc-add" :title="mode === 'path' ? '新增服务（basePath 前缀分发）' : '新增服务（独立端口监听）'">＋</button>
     </form>
   </section>
 </template>

@@ -8,7 +8,7 @@ import type {
   RouteResponse,
   Service,
 } from './types.js';
-import { SCHEMA_VERSION } from './types.js';
+import { BASE_PATH_PATTERN, DEFAULT_SERVICE_ID, RESERVED_BASE_PATHS, SCHEMA_VERSION, slugifyBasePath } from './types.js';
 
 /** 路由响应行为字段（禁用/延迟/抖动/故障/序列/CRUD），可通过 add 的 behavior 与 update 的 patch 设置 */
 export type RouteBehavior = Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth'>;
@@ -65,8 +65,8 @@ export class RouteRegistry extends EventEmitter {
     return this.services.get(id);
   }
 
-  addService(name: string, port: number, id: string = randomUUID()): Service {
-    const service: Service = { id, name, port, createdAt: Date.now() };
+  addService(name: string, port: number, id: string = randomUUID(), basePath?: string): Service {
+    const service: Service = { id, name, port, createdAt: Date.now(), ...(basePath !== undefined ? { basePath } : {}) };
     this.services.set(id, service);
     this.emit('change');
     return service;
@@ -83,8 +83,8 @@ export class RouteRegistry extends EventEmitter {
     return removed;
   }
 
-  /** 更新服务分组（名称 / 代理目标）；服务不存在返回 false */
-  updateService(id: string, patch: Partial<Pick<Service, 'name' | 'proxyTarget'>>): boolean {
+  /** 更新服务分组（名称 / 代理目标 / basePath）；服务不存在返回 false */
+  updateService(id: string, patch: Partial<Pick<Service, 'name' | 'proxyTarget' | 'basePath'>>): boolean {
     const current = this.services.get(id);
     if (!current) return false;
     this.services.set(id, { ...current, ...patch });
@@ -98,6 +98,56 @@ export class RouteRegistry extends EventEmitter {
 
   findServiceByPort(port: number): Service | undefined {
     return [...this.services.values()].find((s) => s.port === port);
+  }
+
+  /** 按路径前缀查找非默认服务（路径模式分发用）；默认服务固定占用主端口根路径，不参与前缀匹配 */
+  findServiceByBasePath(basePath: string): Service | undefined {
+    if (!basePath) return undefined;
+    return [...this.services.values()].find((s) => s.id !== DEFAULT_SERVICE_ID && s.basePath === basePath);
+  }
+
+  /** 校验 basePath 保留前缀与格式；合法返回 null，否则返回错误信息 */
+  validateBasePathFormat(basePath: string): string | null {
+    if (RESERVED_BASE_PATHS.has(basePath)) return `basePath "${basePath}" 为保留前缀，不可使用`;
+    if (!basePath || !BASE_PATH_PATTERN.test(basePath)) {
+      return 'basePath 需为小写字母或数字开头，仅含小写字母、数字、连字符';
+    }
+    return null;
+  }
+
+  /** basePath 冲突检查：与其他非默认服务的 basePath 重复，或与默认服务任一接口路径的首段重合（路径模式下会遮蔽该接口）。excludeId 用于更新时排除自身 */
+  findBasePathConflict(basePath: string, excludeId?: string): string | null {
+    for (const service of this.services.values()) {
+      if (service.id === DEFAULT_SERVICE_ID || service.id === excludeId) continue;
+      if (service.basePath === basePath) return `basePath "${basePath}" 已被服务「${service.name}」占用`;
+    }
+    for (const route of this.routes.values()) {
+      if (route.serviceId !== DEFAULT_SERVICE_ID) continue;
+      const firstSegment = route.path.split('/').filter(Boolean)[0];
+      if (firstSegment === basePath) {
+        return `basePath "${basePath}" 与默认服务接口 ${route.method} ${route.path} 的路径前缀冲突`;
+      }
+    }
+    return null;
+  }
+
+  /** 旧配置兼容：为缺失/非法/冲突 basePath 的非默认服务自动生成唯一前缀；有变更返回 true（触发 change 事件落盘） */
+  ensureBasePaths(): boolean {
+    let changed = false;
+    for (const service of this.listServices()) {
+      if (service.id === DEFAULT_SERVICE_ID) continue;
+      if (service.basePath && this.validateBasePathFormat(service.basePath) === null && this.findBasePathConflict(service.basePath, service.id) === null) continue;
+      const base = slugifyBasePath(service.name) || `svc-${service.port > 0 ? service.port : randomUUID().slice(0, 8)}`;
+      let candidate = base;
+      let n = 2;
+      while (this.validateBasePathFormat(candidate) !== null || this.findBasePathConflict(candidate, service.id) !== null) {
+        candidate = `${base}-${n++}`;
+      }
+      this.services.set(service.id, { ...service, basePath: candidate });
+      changed = true;
+    }
+    if (changed) this.emit('change');
+    return changed;
   }
 
   // ---------- 接口 ----------

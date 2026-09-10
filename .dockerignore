@@ -1,0 +1,13 @@
+node_modules
+dist
+public
+coverage
+*.log
+.git
+.github
+.vscode
+*.test.ts
+**/*.test.ts
+polymock.config.json
+Dockerfile
+.dockerignore

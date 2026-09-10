@@ -7,7 +7,7 @@ import type { RequestLogStore } from './request-log.js';
 import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
 import { renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
-import { DEFAULT_SERVICE_ID } from '../types.js';
+import { DEFAULT_SERVICE_ID, type PolyMockMode } from '../types.js';
 import type { RequestCondition, RouteRequest, RouteResponse, Route, RouteAuth } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,6 +21,8 @@ export interface MainAppOptions {
   adminToken?: string;
   /** 代理目标白名单（host 列表）：设置后管理端与转发均要求目标 hostname 在白名单内；缺省不校验 */
   proxyAllowHosts?: string[];
+  /** 运行模式：path 时按服务 basePath 前缀经主端口分发；缺省 port（各服务独立端口） */
+  mode?: PolyMockMode;
 }
 
 /** Mock 分发的可选依赖：请求日志与 {{$id}} 自增计数器 */
@@ -566,7 +568,41 @@ export function createApp(registry: RouteRegistry, manager: ServiceManager, opti
     logs: options.logs,
     adminToken: options.adminToken,
     proxyAllowHosts: options.proxyAllowHosts,
+    mode: options.mode,
   }));
+
+  // ---- 路径模式：/{basePath}/** 剥离前缀后分发到对应服务；未命中前缀回退后续处理（静态资源 / 默认服务）----
+  if (options.mode === 'path') {
+    const dispatchers = new Map<string, express.RequestHandler>();
+    const dispatcherFor = (serviceId: string): express.RequestHandler => {
+      let handler = dispatchers.get(serviceId);
+      if (!handler) {
+        handler = createDispatch(registry, serviceId, deps);
+        dispatchers.set(serviceId, handler);
+      }
+      return handler;
+    };
+    app.use((req, res, next) => {
+      const firstSegment = req.path.split('/')[1] ?? '';
+      const service = firstSegment ? registry.findServiceByBasePath(firstSegment) : undefined;
+      if (!service) {
+        next();
+        return;
+      }
+      /* 剥离 basePath 前缀后复用该服务的 dispatch；dispatch 未命中（next）时还原 url 继续走静态资源/默认分发 */
+      const queryIndex = req.url.indexOf('?');
+      const query = queryIndex >= 0 ? req.url.slice(queryIndex) : '';
+      const rest = req.path.slice(firstSegment.length + 1) || '/';
+      const originalUrl = req.originalUrl;
+      req.url = rest + query;
+      req.originalUrl = req.url;
+      dispatcherFor(service.id)(req, res, () => {
+        req.url = originalUrl;
+        req.originalUrl = originalUrl;
+        next();
+      });
+    });
+  }
 
   // ---- Web UI 静态资源 ----
   app.use(express.static(PUBLIC_DIR));
