@@ -1,5 +1,28 @@
 export const DEFAULT_SERVICE_ID = 'default';
 
+/** 主服务（含 Web UI / 管理 API）默认端口：配置与环境变量均未指定时的兜底值 */
+export const DEFAULT_PORT = 33233;
+
+function isUsablePort(port: unknown): port is number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+/**
+ * 主端口解析（后端入口与前端 dev 代理共用同一规则）：
+ * POLYMOCK_PORT 环境变量 > 配置文件 default 服务端口 > DEFAULT_PORT。
+ * 环境变量空串视为未设置；非法端口（非 1-65535 整数）逐级回退。
+ */
+export function resolveMainPort(
+  env: { POLYMOCK_PORT?: string },
+  state: { services?: ReadonlyArray<{ id: string; port?: number }> },
+): number {
+  const fromEnv = env.POLYMOCK_PORT ? Number(env.POLYMOCK_PORT) : undefined;
+  if (isUsablePort(fromEnv)) return fromEnv;
+  const fromConfig = state.services?.find((s) => s.id === DEFAULT_SERVICE_ID)?.port;
+  if (isUsablePort(fromConfig)) return fromConfig;
+  return DEFAULT_PORT;
+}
+
 export interface RouteResponse {
   status: number;
   contentType?: string;

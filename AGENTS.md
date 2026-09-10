@@ -10,6 +10,7 @@
 - 入口：`src/index.ts`；构建产物输出到 `dist/`
 - 关键行为：管理 API 挂载在 `/__polymock`；Mock 请求按 `(serviceId, method, path)` 在注册表查找响应
 - 配置持久化到 `polymock.config.json`，注册表每次变更自动落盘
+- 主端口解析：`POLYMOCK_PORT` 环境变量 > 配置文件 `default` 服务 `port` > 出厂默认 `33233`（`src/types.ts` 的 `resolveMainPort`，后端入口与 dev 代理共用；改端口编辑配置文件即可，无需改源码）
 
 ## 铁律（不可违反）
 
@@ -43,7 +44,7 @@ src/
     manager.ts        # 服务生命周期（启停独立端口的服务）
 web/                  # Web UI 前端源码（Vue 3 SFC + Vite，依赖装在根 package.json）
   index.html          # Vite 入口（挂载点 <div id="app">）
-  vite.config.ts      # 构建产物输出 ../public；dev 代理 /__polymock -> localhost:8080
+  vite.config.ts      # 构建产物输出 ../public；dev 代理 /__polymock -> 主端口（resolveMainPort，跟随配置文件）
   tsconfig.json       # 前端类型检查（vue-tsc -p web/tsconfig.json）
   src/
     main.ts           # createApp(App).mount('#app')，引入全局样式
@@ -62,7 +63,7 @@ public/               # ⚠️ 纯构建产物（vite build 输出，不入库�
 | 命令 | 作用 |
 | --- | --- |
 | `pnpm dev` | tsx watch 热启动（后端） |
-| `pnpm dev:web` | Vite dev server（前端 HMR，代理 /__polymock 到 8080） |
+| `pnpm dev:web` | Vite dev server（前端 HMR，代理 /__polymock 到主端口，跟随配置文件） |
 | `pnpm build` | tsc 编译到 dist + vite build 输出 public/（start 前必须先执行） |
 | `pnpm build:web` | 仅构建前端（vite build → public/） |
 | `pnpm start` | 运行 dist/index.js |

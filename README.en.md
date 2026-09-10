@@ -21,22 +21,22 @@ Tech stack: Node.js 18+ / TypeScript / Express 5 (backend), Vue 3 + Vite (web co
 ```bash
 pnpm install
 pnpm build        # tsc compiles the backend to dist/ + vite builds the frontend to public/
-pnpm start        # then open http://localhost:8080
+pnpm start        # then open http://localhost:33233
 ```
 
 > `public/` contains frontend build output and is not committed. **Run `pnpm build` after cloning**, otherwise the web UI will not be served.
 
 Once started:
 
-- Web console: <http://localhost:8080>
-- The default service `default` listens on the main port (`8080` by default) and ships with a default route `GET /api/hello`
+- Web console: <http://localhost:33233>
+- The default service `default` listens on the main port (`33233` out of the box; **to change it, edit the `port` field of the `default` service in `polymock.config.json` and restart — no source changes needed**) and ships with a default route `GET /api/hello`
 - Every change is persisted to `polymock.config.json` automatically and restored on restart
 
 ### Development mode
 
 ```bash
 pnpm dev          # backend with hot reload (tsx watch)
-pnpm dev:web      # frontend Vite dev server (HMR); /__polymock is proxied to localhost:8080
+pnpm dev:web      # frontend Vite dev server (HMR); /__polymock proxy follows the main port automatically
 ```
 
 In development mode the web UI is served by Vite (default <http://localhost:5173>); mock requests themselves still go to the main port or to each service group's port.
@@ -45,7 +45,7 @@ In development mode the web UI is served by Vite (default <http://localhost:5173
 
 ```bash
 # Register a route with request conditions and response variants
-curl -X POST http://localhost:8080/__polymock/routes \
+curl -X POST http://localhost:33233/__polymock/routes \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Order list",
@@ -58,8 +58,8 @@ curl -X POST http://localhost:8080/__polymock/routes \
     ]
   }'
 
-curl http://localhost:8080/api/orders                                    # {"role":"default"}
-curl -H "X-Role: admin" http://localhost:8080/api/orders                 # {"role":"admin"}
+curl http://localhost:33233/api/orders                                    # {"role":"default"}
+curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"role":"admin"}
 ```
 
 ## Features
@@ -123,7 +123,7 @@ Routes with `crud` enabled respond with resource semantics (in-memory only, rese
 
 ## Web Console
 
-Open <http://localhost:8080> in a browser and switch between three views in the sidebar (your choice is remembered):
+Open <http://localhost:33233> in a browser and switch between three views in the sidebar (your choice is remembered):
 
 | View | Description |
 | --- | --- |
@@ -155,13 +155,13 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 
 ## Configuration File
 
-Configuration is persisted to `polymock.config.json` (path configurable via `POLYMOCK_CONFIG_FILE`) and saved automatically on every registry change (atomic write: temp file + rename). The current schema version is `2`:
+Configuration is persisted to `polymock.config.json` (path configurable via `POLYMOCK_CONFIG_FILE`) and saved automatically on every registry change (atomic write: temp file + rename). The `port` field of the `default` service is the main port (home of the web UI, admin API, and the default service). The current schema version is `2`:
 
 ```json
 {
   "version": 2,
   "services": [
-    { "id": "default", "name": "Default service", "port": 8080, "createdAt": 1730000000000 },
+    { "id": "default", "name": "Default service", "port": 33233, "createdAt": 1730000000000 },
     { "id": "u-9f2c", "name": "User service", "port": 8101, "createdAt": 1730000001000, "proxyTarget": "http://localhost:3000" }
   ],
   "routes": [
@@ -197,7 +197,7 @@ Key fields:
 | Field | Description |
 | --- | --- |
 | `version` | Schema version, currently `2` |
-| `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget` |
+| `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; **the `default` service's `port` is the main port — edit it and restart to take effect** |
 | `routes[].method` / `path` | HTTP method and path; paths support `:param` segments |
 | `routes[].response` | Default response: `status` / `contentType?` / `body` |
 | `routes[].request` / `requireMatch` | Expected request conditions and the admission gate |
@@ -212,7 +212,7 @@ Older configuration files (missing `version` or `version: 1`) are migrated autom
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `POLYMOCK_PORT` | `8080` | Main port (home of the default service, web UI, and admin API) |
+| `POLYMOCK_PORT` | `default` service `port` in the config file (`33233` out of the box) | Main port (home of the default service, web UI, and admin API); takes precedence over the config file and is written back to it when set explicitly |
 | `POLYMOCK_HOST` | unset (listens on all interfaces) | Listen address; a startup warning is printed when bound to a non-loopback address without an admin token |
 | `POLYMOCK_CONFIG_FILE` | `polymock.config.json` | Configuration file path |
 | `POLYMOCK_ADMIN_TOKEN` | unset (no auth) | Admin token; when set, every `/__polymock` endpoint requires it (an empty string counts as unset) |
@@ -223,7 +223,7 @@ Older configuration files (missing `version` or `version: 1`) are migrated autom
 | Command | Purpose |
 | --- | --- |
 | `pnpm dev` | Backend with hot reload (tsx watch) |
-| `pnpm dev:web` | Frontend Vite dev server (HMR; `/__polymock` proxied to localhost:8080) |
+| `pnpm dev:web` | Frontend Vite dev server (HMR; the `/__polymock` proxy follows the main port automatically, same resolution rule as the backend) |
 | `pnpm build` | tsc compiles the backend to `dist/` + vite builds the frontend to `public/` |
 | `pnpm build:web` | Build the frontend only |
 | `pnpm start` | Run `dist/index.js` (requires `pnpm build` first) |

@@ -47,10 +47,14 @@ describe('web 前端源码完整性', () => {
     expect(() => fs.accessSync(new URL('public/favicon.ico', webRoot))).not.toThrow();
   });
 
-  it('vite 构建契约：产物输出 ../public 且代理指向后端 8080', () => {
+  it('vite 构建契约：产物输出 ../public 且代理端口与后端共用 resolveMainPort', () => {
     const cfg = readWebFile('vite.config.ts');
     expect(cfg).toContain("'../public'");
     expect(cfg).toContain('emptyOutDir: true');
-    expect(cfg).toContain("'http://localhost:8080'");
+    // 代理端口必须与后端同一解析规则（src/types.ts resolveMainPort），禁止硬编码端口
+    expect(cfg).toContain("from '../src/types'");
+    expect(cfg).toContain('resolveMainPort');
+    expect(cfg).toContain('POLYMOCK_CONFIG_FILE');
+    expect(cfg).not.toMatch(/localhost:\d+/);
   });
 });
