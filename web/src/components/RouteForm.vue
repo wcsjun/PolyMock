@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { createRoute, updateRoute } from '../api';
-import type { ConditionRow, NotifyFn, Route, RouteAuth, RoutePayload, ServiceInfo } from '../types';
+import type { ConditionRow, NotifyFn, PolyMockMode, Route, RouteAuth, RoutePayload, ServiceInfo } from '../types';
 import {
   buildRouteRequest,
   bodyRowsToJsonValue,
@@ -10,6 +10,7 @@ import {
   jsonValueToBodyRows,
   parseSequenceDraft,
   sequenceToDraftText,
+  serviceDisplaySuffix,
   splitRouteRequest,
 } from '../utils';
 import ConditionTable from './ConditionTable.vue';
@@ -17,6 +18,8 @@ import ConditionTable from './ConditionTable.vue';
 const props = defineProps<{
   services: ServiceInfo[];
   editing: Route | null;
+  /** 运行模式：决定服务分组下拉的后缀展示（端口模式 :端口 / 路径模式 basePath 前缀） */
+  mode: PolyMockMode;
   notify: NotifyFn;
 }>();
 
@@ -527,7 +530,7 @@ async function submit() {
         <div class="field">
           <label for="f-service">服务分组</label>
           <select id="f-service" v-model="serviceId">
-            <option v-for="s in services" :key="s.id" :value="s.id">{{ s.name }} :{{ s.port }}</option>
+            <option v-for="s in services" :key="s.id" :value="s.id">{{ s.name }} {{ serviceDisplaySuffix(s, props.mode) }}</option>
           </select>
         </div>
 

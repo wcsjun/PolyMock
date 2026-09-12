@@ -12,6 +12,7 @@ import {
   parseSequenceDraft,
   saveDrawerWidth,
   sequenceToDraftText,
+  serviceDisplaySuffix,
   splitRouteRequest,
   toJavaEntity,
 } from './utils';
@@ -35,6 +36,19 @@ describe('buildCurl / buildFetchSnippet', () => {
     expect(buildCurl('http://x/api', 'DELETE')).toBe("curl -X DELETE 'http://x/api'");
     expect(buildFetchSnippet('http://x/api', 'POST')).toBe("fetch('http://x/api', {\n  method: 'POST',\n})");
     expect(buildFetchSnippet('http://x/api', 'PUT')).toBe("fetch('http://x/api', {\n  method: 'PUT',\n})");
+  });
+});
+
+describe('serviceDisplaySuffix 服务分组展示后缀', () => {
+  it('端口模式显示 :端口', () => {
+    expect(serviceDisplaySuffix({ port: 33233, isDefault: true }, 'port')).toBe(':33233');
+    expect(serviceDisplaySuffix({ port: 3001, isDefault: false }, 'port')).toBe(':3001');
+  });
+
+  it('路径模式显示 basePath 前缀，默认服务为 /', () => {
+    expect(serviceDisplaySuffix({ port: 0, isDefault: true }, 'path')).toBe('/');
+    expect(serviceDisplaySuffix({ port: 0, isDefault: false, basePath: 'order' }, 'path')).toBe('/order');
+    expect(serviceDisplaySuffix({ port: 0, isDefault: false }, 'path')).toBe('/');
   });
 });
 

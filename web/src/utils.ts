@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'vue';
-import type { ConditionRow, ConditionType, RequestCondition, RouteRequest } from './types';
+import type { ConditionRow, ConditionType, PolyMockMode, RequestCondition, RouteRequest } from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -11,6 +11,12 @@ export const METHOD_COLORS: Record<string, string> = {
 
 export function methodColor(method: string): string {
   return METHOD_COLORS[method] || '#5b6b7c';
+}
+
+/** 服务分组的展示后缀：端口模式显示 :端口；路径模式显示 basePath 前缀（默认服务占用根路径，显示 /） */
+export function serviceDisplaySuffix(svc: { port: number; isDefault: boolean; basePath?: string }, mode: PolyMockMode): string {
+  if (mode !== 'path') return `:${svc.port}`;
+  return svc.isDefault ? '/' : `/${svc.basePath ?? ''}`;
 }
 
 /** 对应原 app.js 的 formatBody()：字符串原样展示，其余格式化缩进 */
