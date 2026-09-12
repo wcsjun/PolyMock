@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildCurl,
+  clampDrawerWidth,
+  clearDrawerWidth,
   isTemplateJsonValid,
   buildFetchSnippet,
   bodyRowsToJsonValue,
   buildRouteRequest,
   jsonValueToBodyRows,
+  loadDrawerWidth,
   parseSequenceDraft,
+  saveDrawerWidth,
   sequenceToDraftText,
   splitRouteRequest,
   toJavaEntity,
@@ -230,5 +234,53 @@ describe('isTemplateJsonValid', () => {
   it('结构破坏的文本不通过', () => {
     expect(isTemplateJsonValid('{"code": {{params.code')).toBe(false);
     expect(isTemplateJsonValid('not json')).toBe(false);
+  });
+});
+
+describe('clampDrawerWidth / 抽屉宽度持久化', () => {
+  it('钳制到 [560, 视口×0.94]，四舍五入取整', () => {
+    expect(clampDrawerWidth(400, 1920)).toBe(560);
+    expect(clampDrawerWidth(1000, 1920)).toBe(1000);
+    expect(clampDrawerWidth(9999, 1920)).toBe(Math.floor(1920 * 0.94));
+    expect(clampDrawerWidth(600.4, 1920)).toBe(600);
+  });
+
+  it('视口极窄时上限不小于最小宽度', () => {
+    expect(clampDrawerWidth(800, 500)).toBe(560);
+    expect(clampDrawerWidth(300, 500)).toBe(560);
+  });
+
+  it('load/save/clear 读写 localStorage；无记录与非法值返回 null，超宽值按视口钳制', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      expect(loadDrawerWidth(1920)).toBeNull();
+      saveDrawerWidth(1000);
+      expect(loadDrawerWidth(1920)).toBe(1000);
+      saveDrawerWidth(99999);
+      expect(loadDrawerWidth(1920)).toBe(Math.floor(1920 * 0.94));
+      saveDrawerWidth(-5);
+      expect(loadDrawerWidth(1920)).toBeNull();
+      saveDrawerWidth(900);
+      clearDrawerWidth();
+      expect(loadDrawerWidth(1920)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('localStorage 不可用时 load 返回 null，save/clear 静默不抛错', () => {
+    vi.stubGlobal('localStorage', undefined);
+    try {
+      expect(loadDrawerWidth(1920)).toBeNull();
+      expect(() => saveDrawerWidth(800)).not.toThrow();
+      expect(() => clearDrawerWidth()).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
