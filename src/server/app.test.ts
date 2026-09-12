@@ -181,6 +181,33 @@ describe('createApp 集成测试', () => {
     expect(await hit.json()).toEqual({ from: 'extra' });
   });
 
+  it('管理 API：删除服务后从列表消失，其接口一并删除', async () => {
+    const created = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '待删服务', port: freePort }),
+    });
+    expect(created.status).toBe(201);
+    createdServiceId = ((await created.json()) as { service: { id: string } }).service.id;
+
+    await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serviceId: createdServiceId, name: '附属接口', method: 'GET', path: '/api/doomed', response: { status: 200, body: {} } }),
+    });
+
+    const del = await fetch(`${server.baseUrl}/__polymock/services/${createdServiceId}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { ok: boolean }).ok).toBe(true);
+
+    const services = ((await (await fetch(`${server.baseUrl}/__polymock/services`)).json()) as { services: Array<{ id: string }> }).services;
+    expect(services.some((s) => s.id === createdServiceId)).toBe(false);
+
+    const routes = ((await (await fetch(`${server.baseUrl}/__polymock/routes?serviceId=${createdServiceId}`)).json()) as { routes: unknown[] }).routes;
+    expect(routes).toHaveLength(0);
+    createdServiceId = undefined;
+  });
+
   it('管理 API：删除不存在的服务返回 404', async () => {
     const del = await fetch(`${server.baseUrl}/__polymock/services/no-such-service`, { method: 'DELETE' });
     expect(del.status).toBe(404);

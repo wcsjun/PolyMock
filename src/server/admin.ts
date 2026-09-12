@@ -396,11 +396,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: '默认服务不可删除' });
       return;
     }
-    if (!registry.getService(serviceId)) {
+    await manager.stop(serviceId);
+    if (!registry.removeService(serviceId)) {
       res.status(404).json({ ok: false, error: '服务不存在' });
       return;
     }
-    await manager.stop(serviceId);
     res.json({ ok: true });
   });
 
