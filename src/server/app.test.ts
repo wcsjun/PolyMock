@@ -86,6 +86,14 @@ describe('createApp 集成测试', () => {
     expect(gone.status).toBe(404);
   });
 
+  it('管理 API：删除不存在的接口返回 404', async () => {
+    const del = await fetch(`${server.baseUrl}/__polymock/routes?method=GET&path=/api/never-registered`, { method: 'DELETE' });
+    expect(del.status).toBe(404);
+    const body = (await del.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('接口不存在');
+  });
+
   it('管理 API：校验不合法参数', async () => {
     const res = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',
@@ -171,6 +179,14 @@ describe('createApp 集成测试', () => {
     const hit = await fetch(`http://127.0.0.1:${freePort}/api/extra`);
     expect(hit.status).toBe(200);
     expect(await hit.json()).toEqual({ from: 'extra' });
+  });
+
+  it('管理 API：删除不存在的服务返回 404', async () => {
+    const del = await fetch(`${server.baseUrl}/__polymock/services/no-such-service`, { method: 'DELETE' });
+    expect(del.status).toBe(404);
+    const body = (await del.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('服务不存在');
   });
 
   it('独立端口服务：query 与 body 条件同时校验，JSON 请求体正常解析', async () => {
