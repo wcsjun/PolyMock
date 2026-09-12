@@ -153,7 +153,7 @@ async function saveProxy(svc: ServiceInfo) {
                 <span class="service-name" :title="svc.name">{{ svc.name }}</span>
                 <span v-if="svc.isDefault" class="service-tag">默认</span>
               </span>
-              <span v-if="mode === 'path' && !svc.isDefault" class="service-port" :title="`路径模式前缀 /${svc.basePath ?? ''}`">/{{ svc.basePath }}</span>
+              <span v-if="mode === 'path'" class="service-port" :title="svc.isDefault ? '默认服务占用主端口根路径，接口无需前缀' : `路径模式前缀 /${svc.basePath ?? ''}`">{{ svc.isDefault ? '/' : `/${svc.basePath}` }}</span>
               <span v-else class="service-port">:{{ svc.port }}</span>
             </span>
             <span class="service-meta">
