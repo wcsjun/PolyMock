@@ -8,7 +8,7 @@ import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
 import { renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
 import { DEFAULT_SERVICE_ID, type PolyMockMode } from '../types.js';
-import type { RequestCondition, RouteRequest, RouteResponse, Route, RouteAuth } from '../types.js';
+import type { RequestCondition, RouteRequest, RouteResponse, ResponseHeader, Route, RouteAuth } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
@@ -331,6 +331,24 @@ function flattenQuery(query: Record<string, unknown>): Record<string, string> {
   return result;
 }
 
+/**
+ * 应用自定义响应头（值支持模板占位符）。
+ * 同名首次出现用 set（覆盖，如 Content-Type 压过 contentType 字段），再次出现用 append 追加为多值头（如多个 Set-Cookie）。
+ */
+function applyResponseHeaders(res: express.Response, headers: ResponseHeader[] | undefined, ctx: TemplateContext): void {
+  const seen = new Set<string>();
+  for (const header of headers ?? []) {
+    const value = header.value.includes('{{') ? renderTemplateText(header.value, ctx) : header.value;
+    const lower = header.key.toLowerCase();
+    if (seen.has(lower)) {
+      res.append(header.key, value);
+    } else {
+      seen.add(lower);
+      res.set(header.key, value);
+    }
+  }
+}
+
 export function createDispatch(registry: RouteRegistry, serviceId: string, deps?: DispatchDeps): express.RequestHandler {
   const idCounters = deps?.idCounters ?? new Map<string, number>();
   const seqCounters = deps?.seqCounters ?? new Map<string, number>();
@@ -542,6 +560,8 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     if (result.response.contentType) {
       res.type(result.response.contentType);
     }
+    /* 自定义头在 contentType 之后应用：同名 Content-Type 覆盖 contentType 字段 */
+    applyResponseHeaders(res, result.response.headers, templateCtx);
     status = result.response.status;
     res.status(status).json(rendered);
     writeLog();

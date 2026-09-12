@@ -38,17 +38,25 @@ export interface Route {
   jitterMs?: number;
   /** 故障注入百分比（0-100），命中概率返回 500 */
   failureRate?: number;
-  /** 序列响应：按命中次序循环返回（优先于场景集/变体/默认响应，requireMatch 门槛之后） */
-  sequence?: Array<{ status: number; body: unknown }>;
+  /** 序列响应：按命中次序循环返回（优先于场景集/变体/默认响应，requireMatch 门槛之后），每步可带自定义响应头 */
+  sequence?: Array<{ status: number; body: unknown; headers?: ResponseHeader[] }>;
   /** 有状态 CRUD：路径需含 :id 参数，服务内存维护资源集合（重启清空） */
   crud?: boolean;
   createdAt: number;
+}
+
+/** 单条自定义响应头（后端 ResponseHeader 镜像）；同名多条按多值头处理（如多个 Set-Cookie） */
+export interface ResponseHeader {
+  key: string;
+  value: string;
 }
 
 /** 接口响应定义（后端 RouteResponse 镜像） */
 export interface RouteResponse {
   status: number;
   contentType?: string;
+  /** 自定义响应头：在 contentType 之后应用（同名 Content-Type 覆盖 contentType 字段），值支持模板占位符 */
+  headers?: ResponseHeader[];
   body: unknown;
 }
 
@@ -120,19 +128,19 @@ export interface RoutePayload {
   method: string;
   path: string;
   name?: string;
-  response: { status: number; body: string };
+  response: { status: number; headers?: ResponseHeader[]; body: string };
   request?: RouteRequest;
   requireMatch?: boolean;
   variants?: Array<{
     name: string;
     match?: RouteRequest;
-    response: { status: number; body: string };
+    response: { status: number; headers?: ResponseHeader[]; body: string };
   }>;
   disabled?: boolean;
   delayMs?: number;
   jitterMs?: number;
   failureRate?: number;
-  sequence?: Array<{ status: number; body: string }>;
+  sequence?: Array<{ status: number; headers?: ResponseHeader[]; body: string }>;
   crud?: boolean;
   /** 路由级认证：编辑态传 null 清除；新建态仅在开启时携带 */
   auth?: RouteAuth | null;

@@ -113,6 +113,7 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 - **序列响应**：按命中次序循环返回一组响应（如「成功 → 成功 → 失败」），优先于场景集/变体/默认响应
 - **全局场景集**：设置 `activeVariant` 后，所有拥有同名变体的接口强制命中该变体（绕过其条件），一键切换全局场景
 - **动态响应模板**：响应体字符串中支持 `{{query.x}}`、`{{header.x}}`、`{{body.x}}`（点路径）、`{{params.x}}`（路径参数）、`{{$id}}`（路由级自增）、`{{$now}}`（ISO 时间）、`{{$int(a,b)}}`（闭区间随机整数），以及内置假数据 `{{$name}}` `{{$ename}}` `{{$email}}` `{{$phone}}` `{{$city}}` `{{$word}}` `{{$bool}}`；取不到值的占位符原样保留
+- **自定义响应头**：默认响应、每个变体与序列每步均可附加自定义响应头；值支持模板占位符（如 `Location: /api/users/{{params.id}}`、`X-Request-Id: {{$id}}`）；同名多条按多值头返回（如多个 Set-Cookie）；在 `contentType` 字段之后应用，同名 Content-Type 覆盖之；`content-length` / `transfer-encoding` 等受管头注册时拒绝（400）
 - **延迟/抖动/故障注入**：`delayMs`（0-60000 固定延迟）+ `jitterMs`（随机抖动上限），`failureRate`（0-100%）按概率返回 500
 - **格式化与即时校验**：body 一键格式化，失焦即时校验 JSON 并标红，提交时后端再次校验
 
@@ -228,10 +229,10 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 | `version` | schema 版本，当前为 `2` |
 | `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；路径模式下非默认服务改由 `basePath` 前缀承载（`port` 不使用，置 `0`）；**`default` 服务的 `port` 即主端口，改后重启生效** |
 | `routes[].method` / `path` | HTTP 方法与路径，path 支持 `:param` 参数段 |
-| `routes[].response` | 默认响应：`status` / `contentType?` / `body` |
+| `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body` |
 | `routes[].request` / `requireMatch` | 预期请求条件与准入开关 |
 | `routes[].variants[]` | 响应变体：`name` / `match?`（缺省=总是命中）/ `response` |
-| `routes[].sequence[]` | 序列响应：`{ status, body }` 数组，循环返回 |
+| `routes[].sequence[]` | 序列响应：`{ status, body, headers? }` 数组，循环返回 |
 | `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` | 行为开关与模拟参数 |
 | `settings.activeVariant` | 全局场景集：非空时同名变体强制命中 |
 

@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'vue';
-import type { ConditionRow, ConditionType, RequestCondition, RouteRequest } from './types';
+import type { ConditionRow, ConditionType, RequestCondition, ResponseHeader, RouteRequest } from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -233,10 +233,11 @@ export function routeCardStyle(method: string, index: number): CardStyle {
 
 /* ---------- 序列响应草稿（RouteForm 编辑 ⇄ 提交） ---------- */
 
-/** 序列响应单步（提交态）：body 统一为字符串原样提交，由后端解析模板/JSON */
+/** 序列响应单步（提交态）：body 统一为字符串原样提交，由后端解析模板/JSON；可选自定义响应头 */
 export interface SequenceStep {
   status: number;
   body: string;
+  headers?: ResponseHeader[];
 }
 
 export type SequenceParseResult =
@@ -244,8 +245,9 @@ export type SequenceParseResult =
   | { ok: false; error: string };
 
 /**
- * 解析「序列响应」草稿文本：要求 JSON 数组，每项含数字 status 与 body
+ * 解析「序列响应」草稿文本：要求 JSON 数组，每项含数字 status 与 body（headers 可选）
  * - body 为字符串时原样保留（后端会解析）；其余类型 JSON.stringify 转为字符串
+ * - headers 为数组时逐项要求非空字符串 key 与字符串 value（trim 后入库），空数组省略
  * - 空文本 / 非法 JSON / 非数组 / 空序列 / 步骤缺字段 / status 非 100-599 整数均返回 ok:false
  */
 export function parseSequenceDraft(text: string): SequenceParseResult {
@@ -269,7 +271,21 @@ export function parseSequenceDraft(text: string): SequenceParseResult {
       return { ok: false, error: `第 ${index + 1} 步的 status 必须是 100-599 的整数` };
     }
     if (!('body' in record)) return { ok: false, error: `第 ${index + 1} 步缺少 body` };
-    value.push({ status: record.status, body: typeof record.body === 'string' ? record.body : JSON.stringify(record.body) });
+    let headers: ResponseHeader[] | undefined;
+    if (record.headers !== undefined && record.headers !== null) {
+      if (!Array.isArray(record.headers)) return { ok: false, error: `第 ${index + 1} 步的 headers 必须是数组` };
+      const rows: ResponseHeader[] = [];
+      for (const [hIndex, row] of record.headers.entries()) {
+        const key = (row as ResponseHeader)?.key;
+        const headerValue = (row as ResponseHeader)?.value;
+        if (typeof key !== 'string' || !key.trim() || typeof headerValue !== 'string') {
+          return { ok: false, error: `第 ${index + 1} 步的 headers[${hIndex}] 需包含非空 key 与字符串 value` };
+        }
+        rows.push({ key: key.trim(), value: headerValue });
+      }
+      if (rows.length) headers = rows;
+    }
+    value.push({ status: record.status, body: typeof record.body === 'string' ? record.body : JSON.stringify(record.body), ...(headers ? { headers } : {}) });
   }
   return { ok: true, value };
 }
@@ -286,10 +302,11 @@ function tryParseJson(text: string): unknown {
 }
 
 /** 序列响应回填：把存储态（body 为任意值）转为展示友好的草稿文本；body 为 JSON 字符串时解析为对象便于编辑 */
-export function sequenceToDraftText(sequence?: Array<{ status: number; body: unknown }>): string {
+export function sequenceToDraftText(sequence?: Array<{ status: number; body: unknown; headers?: ResponseHeader[] }>): string {
   const steps = (sequence ?? []).map((step) => ({
     status: step.status,
     body: typeof step.body === 'string' ? tryParseJson(step.body) : step.body,
+    ...(step.headers?.length ? { headers: step.headers } : {}),
   }));
   return JSON.stringify(steps, null, 2);
 }

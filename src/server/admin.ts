@@ -9,6 +9,7 @@ import {
   type ConditionType,
   type RequestCondition,
   type RequestLogEntry,
+  type ResponseHeader,
   type ResponseVariant,
   type Route,
   type RouteAuth,
@@ -115,6 +116,42 @@ function parseResponseBody(raw: unknown, label: string): ParseResult<unknown> {
   }
 }
 
+/** 响应头黑名单：逐跳头与报文长度由 Express/Node 托管，自定义后必然破坏响应 */
+const FORBIDDEN_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'keep-alive',
+  'upgrade',
+  'host',
+]);
+
+/** 解析自定义响应头列表：key trim 且禁含空白/冒号，value 禁含换行；同名多条按多值头处理，空列表归一为 undefined */
+function parseResponseHeaders(raw: unknown, label: string): ParseResult<ResponseHeader[] | undefined> {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (!Array.isArray(raw)) return { ok: false, error: `${label} 的 headers 需为数组` };
+  const list: ResponseHeader[] = [];
+  for (const [index, item] of raw.entries()) {
+    const key = (item as ResponseHeader)?.key;
+    const value = (item as ResponseHeader)?.value;
+    if (typeof key !== 'string' || typeof value !== 'string') {
+      return { ok: false, error: `${label} 的 headers[${index}] 需包含字符串 key 与 value` };
+    }
+    const trimmed = key.trim();
+    if (!trimmed || /\s/.test(trimmed) || trimmed.includes(':')) {
+      return { ok: false, error: `${label} 的 headers[${index}] key 不能为空，且不能含空白或冒号` };
+    }
+    if (/[\r\n]/.test(value)) {
+      return { ok: false, error: `${label} 的 headers[${index}] value 不能包含换行` };
+    }
+    if (FORBIDDEN_RESPONSE_HEADERS.has(trimmed.toLowerCase())) {
+      return { ok: false, error: `${label} 的响应头 "${trimmed}" 由服务端托管，不可自定义` };
+    }
+    list.push({ key: trimmed, value });
+  }
+  return { ok: true, value: list.length > 0 ? list : undefined };
+}
+
 /** 解析响应变体列表并分配 id */
 function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
   if (!Array.isArray(raw)) return { ok: false, error: 'variants 需为数组' };
@@ -134,6 +171,8 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
     const bodyParsed = parseResponseBody(body, `变体「${name.trim()}」`);
     if (!bodyParsed.ok) return bodyParsed;
     body = bodyParsed.value;
+    const headersParsed = parseResponseHeaders(item.response?.headers, `变体「${name.trim()}」`);
+    if (!headersParsed.ok) return headersParsed;
     list.push({
       id: randomUUID(),
       name: name.trim(),
@@ -141,6 +180,7 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
       response: {
         status: typeof item.response?.status === 'number' ? item.response.status : 200,
         contentType: typeof item.response?.contentType === 'string' ? item.response.contentType : undefined,
+        ...(headersParsed.value ? { headers: headersParsed.value } : {}),
         body,
       },
     });
@@ -220,9 +260,9 @@ function validatePathSegments(routePath: string): string | null {
 }
 
 /** 解析序列响应列表：每项 status 100-599 整数，body 走 parseResponseBody */
-function parseSequence(raw: unknown): ParseResult<Array<{ status: number; body: unknown }>> {
+function parseSequence(raw: unknown): ParseResult<Array<{ status: number; body: unknown; headers?: ResponseHeader[] }>> {
   if (!Array.isArray(raw)) return { ok: false, error: 'sequence 需为数组' };
-  const list: Array<{ status: number; body: unknown }> = [];
+  const list: Array<{ status: number; body: unknown; headers?: ResponseHeader[] }> = [];
   for (const [index, item] of raw.entries()) {
     if (item === null || typeof item !== 'object') {
       return { ok: false, error: `sequence[${index}] 需为对象` };
@@ -233,7 +273,9 @@ function parseSequence(raw: unknown): ParseResult<Array<{ status: number; body: 
     }
     const bodyParsed = parseResponseBody((item as { body?: unknown }).body, `sequence[${index}]`);
     if (!bodyParsed.ok) return bodyParsed;
-    list.push({ status: status as number, body: bodyParsed.value });
+    const headersParsed = parseResponseHeaders((item as { headers?: unknown }).headers, `sequence[${index}]`);
+    if (!headersParsed.ok) return headersParsed;
+    list.push({ status: status as number, body: bodyParsed.value, ...(headersParsed.value ? { headers: headersParsed.value } : {}) });
   }
   return { ok: true, value: list };
 }
@@ -565,6 +607,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: bodyParsed.error });
       return;
     }
+    const headersParsed = parseResponseHeaders(response?.headers, 'response');
+    if (!headersParsed.ok) {
+      res.status(400).json({ ok: false, error: headersParsed.error });
+      return;
+    }
 
     let routeRequest: RouteRequest | undefined;
     if (request !== undefined) {
@@ -589,6 +636,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     const route = registry.add(sid, method, routePath, {
       status: response?.status ?? 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
+      ...(headersParsed.value ? { headers: headersParsed.value } : {}),
       body: bodyParsed.value,
     }, routeName, routeRequest, requireMatch, routeVariants, { ...behaviorParsed.value, sequence: routeSequence, auth: routeAuth });
     res.status(201).json({ ok: true, route });
@@ -652,9 +700,15 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
         res.status(400).json({ ok: false, error: bodyParsed.error });
         return;
       }
+      const headersParsed = parseResponseHeaders(response?.headers, 'response');
+      if (!headersParsed.ok) {
+        res.status(400).json({ ok: false, error: headersParsed.error });
+        return;
+      }
       patch.response = {
         status: response?.status ?? 200,
         contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
+        ...(headersParsed.value ? { headers: headersParsed.value } : {}),
         body: bodyParsed.value,
       };
     }

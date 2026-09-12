@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { createRoute, updateRoute } from '../api';
-import type { ConditionRow, NotifyFn, Route, RouteAuth, RoutePayload, ServiceInfo } from '../types';
+import type { ConditionRow, NotifyFn, Route, RouteAuth, RoutePayload, ResponseHeader, ServiceInfo } from '../types';
 import {
   buildRouteRequest,
   bodyRowsToJsonValue,
@@ -71,13 +71,15 @@ function emptyRows(): SceneRows {
   return { query: [], headers: [], body: [] };
 }
 
-/** 一个响应场景 = 匹配条件（rows）+ 返回响应（status/bodyText）；localId 0 固定为默认响应 */
+/** 一个响应场景 = 匹配条件（rows）+ 返回响应（status/headerRows/bodyText）；localId 0 固定为默认响应 */
 interface SceneDraft {
   localId: number;
   name: string;
   tab: CondTab;
   rows: SceneRows;
   status: number | null;
+  /** 自定义响应头（key/value 行编辑） */
+  headerRows: ResponseHeader[];
   bodyText: string;
   invalid: boolean;
 }
@@ -86,11 +88,11 @@ let sceneSeq = 0;
 
 function newScene(name: string): SceneDraft {
   sceneSeq += 1;
-  return { localId: sceneSeq, name, tab: 'query', rows: emptyRows(), status: 200, bodyText: '', invalid: false };
+  return { localId: sceneSeq, name, tab: 'query', rows: emptyRows(), status: 200, headerRows: [], bodyText: '', invalid: false };
 }
 
 function defaultScene(): SceneDraft {
-  return { localId: DEFAULT_SCENE_ID, name: '默认响应', tab: 'query', rows: emptyRows(), status: 200, bodyText: '', invalid: false };
+  return { localId: DEFAULT_SCENE_ID, name: '默认响应', tab: 'query', rows: emptyRows(), status: 200, headerRows: [], bodyText: '', invalid: false };
 }
 
 const serviceId = ref('');
@@ -217,6 +219,7 @@ watch(
 
       const def = defaultScene();
       def.status = route.response.status;
+      def.headerRows = (route.response.headers ?? []).map((h) => ({ ...h }));
       def.bodyText = formatBody(route.response.body);
       ({ query: def.rows.query, headers: def.rows.headers, body: def.rows.body } = splitRouteRequest(route.request));
       requireMatch.value = route.requireMatch === true;
@@ -243,6 +246,7 @@ watch(
         ...(route.variants ?? []).map((v) => {
           const scene = newScene(v.name);
           scene.status = v.response.status;
+          scene.headerRows = (v.response.headers ?? []).map((h) => ({ ...h }));
           scene.bodyText = formatBody(v.response.body);
           scene.rows = splitRouteRequest(v.match);
           return scene;
@@ -307,6 +311,24 @@ function moveScene(localId: number, delta: -1 | 1) {
 
 function sceneRows(tab: CondTab): ConditionRow[] {
   return activeScene.value.rows[tab];
+}
+
+/* ---------- 自定义响应头行编辑 ---------- */
+
+function addResponseHeader() {
+  activeScene.value.headerRows.push({ key: '', value: '' });
+}
+
+function removeResponseHeader(index: number) {
+  activeScene.value.headerRows.splice(index, 1);
+}
+
+/** 提交用：过滤空 key 行；全空返回 undefined（payload 省略该字段） */
+function buildResponseHeaders(scene: SceneDraft): ResponseHeader[] | undefined {
+  const rows = scene.headerRows
+    .map((row) => ({ key: row.key.trim(), value: row.value }))
+    .filter((row) => row.key);
+  return rows.length ? rows : undefined;
 }
 
 function setSceneRows(tab: CondTab, rows: ConditionRow[]) {
@@ -445,16 +467,20 @@ async function submit() {
   try {
     /* 编辑态始终携带三个字段以便清除；新建态仅在有意义时携带 */
     const request = buildRouteRequest(def.rows.query, def.rows.headers, def.rows.body);
-    const variants = variantDrafts.map((scene) => ({
-      name: scene.name.trim(),
-      match: buildRouteRequest(scene.rows.query, scene.rows.headers, scene.rows.body),
-      response: { status: Number(scene.status) || 200, body: scene.bodyText.trim() },
-    }));
+    const defHeaders = buildResponseHeaders(def);
+    const variants = variantDrafts.map((scene) => {
+      const sceneHeaders = buildResponseHeaders(scene);
+      return {
+        name: scene.name.trim(),
+        match: buildRouteRequest(scene.rows.query, scene.rows.headers, scene.rows.body),
+        response: { status: Number(scene.status) || 200, ...(sceneHeaders ? { headers: sceneHeaders } : {}), body: scene.bodyText.trim() },
+      };
+    });
     const payload: RoutePayload = {
       serviceId: serviceId.value,
       method: routeMethod,
       path: routePath,
-      response: { status: Number(def.status) || 200, body: def.bodyText.trim() },
+      response: { status: Number(def.status) || 200, ...(defHeaders ? { headers: defHeaders } : {}), body: def.bodyText.trim() },
       request: editing ? (request ?? {}) : request,
       requireMatch: requireMatch.value,
       variants,
@@ -670,6 +696,18 @@ async function submit() {
               </span>
             </div>
             <input v-model.number="activeScene.status" aria-label="响应状态码" type="number" min="100" max="599">
+            <div class="resp-headers">
+              <div class="label-row">
+                <label>响应头</label>
+                <button type="button" class="mini-btn" @click="addResponseHeader">＋ 添加响应头</button>
+              </div>
+              <p class="hint">自定义响应头，值支持模板（如 /api/users/&#123;&#123;params.id&#125;&#125;）；同名多条按多值头返回</p>
+              <div v-for="(row, i) in activeScene.headerRows" :key="i" class="resp-header-row">
+                <input v-model="row.key" type="text" placeholder="头名称，如 X-Request-Id" spellcheck="false" :aria-label="`响应头名称 ${i + 1}`">
+                <input v-model="row.value" type="text" placeholder="值，如 {{$id}}" spellcheck="false" :aria-label="`响应头值 ${i + 1}`">
+                <button type="button" class="rh-del" title="删除该响应头" :aria-label="`删除响应头 ${i + 1}`" @click="removeResponseHeader(i)">×</button>
+              </div>
+            </div>
             <textarea
               v-model="activeScene.bodyText"
               rows="8"
@@ -976,5 +1014,45 @@ async function submit() {
   min-height: 96px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+/* ---------- 自定义响应头行编辑 ---------- */
+
+.resp-headers {
+  display: grid;
+  gap: 6px;
+}
+
+.resp-header-row {
+  display: flex;
+  gap: 6px;
+}
+
+.resp-header-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.resp-header-row input:first-child {
+  flex: 0 0 38%;
+}
+
+.rh-del {
+  flex: none;
+  width: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.rh-del:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 </style>
