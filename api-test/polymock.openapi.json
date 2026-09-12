@@ -1,0 +1,1584 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "PolyMock 管理 API 与 Mock 分发契约",
+    "version": "1.0.0",
+    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → requireMatch 准入门槛(400) → 序列响应 → 全局场景集 → 条件变体 → 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）",
+    "contact": {
+      "name": "PolyMock"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:33233",
+      "description": "本机实例（port 模式）"
+    },
+    {
+      "url": "http://localhost:33234",
+      "description": "Docker 实例（path 模式，容器内仍为 33233）"
+    }
+  ],
+  "tags": [
+    {
+      "name": "元信息"
+    },
+    {
+      "name": "服务分组"
+    },
+    {
+      "name": "接口管理"
+    },
+    {
+      "name": "调试"
+    },
+    {
+      "name": "设置"
+    },
+    {
+      "name": "Mock 分发"
+    }
+  ],
+  "security": [],
+  "paths": {
+    "/__polymock/meta": {
+      "get": {
+        "tags": [
+          "元信息"
+        ],
+        "summary": "运行模式元信息",
+        "operationId": "getMeta",
+        "responses": {
+          "200": {
+            "description": "当前运行模式与主端口",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "mode",
+                    "mainPort"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "port",
+                        "path"
+                      ]
+                    },
+                    "mainPort": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "mode": "port",
+                  "mainPort": 33233
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/services": {
+      "get": {
+        "tags": [
+          "服务分组"
+        ],
+        "summary": "服务分组列表",
+        "operationId": "listServices",
+        "responses": {
+          "200": {
+            "description": "含默认服务（isDefault=true）与各子服务运行状态、接口数量",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "services"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "services": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Service"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "服务分组"
+        ],
+        "summary": "新建服务分组",
+        "operationId": "createService",
+        "description": "port 模式 body `{ name, port }`，端口需 1-65535 且不与主端口/其他服务冲突，占用时启动失败回滚返回 409；path 模式 body `{ name, basePath? }`，basePath 省略时按服务名自动生成，port 字段被忽略。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "服务名称，全局唯一"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535,
+                    "description": "port 模式必填"
+                  },
+                  "basePath": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]*$",
+                    "description": "path 模式可选；__polymock 与 assets 为保留前缀"
+                  }
+                }
+              },
+              "examples": {
+                "port模式": {
+                  "value": {
+                    "name": "订单服务",
+                    "port": 34101
+                  }
+                },
+                "path模式": {
+                  "value": {
+                    "name": "订单服务",
+                    "basePath": "order"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建成功（port 模式同时完成端口监听启动）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "service"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "service": {
+                      "$ref": "#/components/schemas/Service"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "服务名已存在 / 端口与主服务或已有服务冲突 / 端口启动失败 / basePath 冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "重名": {
+                    "value": {
+                      "ok": false,
+                      "error": "服务名称「订单服务」已存在"
+                    }
+                  },
+                  "端口占用": {
+                    "value": {
+                      "ok": false,
+                      "error": "端口 34101 已被其他服务占用"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/services/{id}": {
+      "delete": {
+        "tags": [
+          "服务分组"
+        ],
+        "summary": "删除服务分组",
+        "operationId": "deleteService",
+        "description": "默认服务（id=default）不可删除。删除成功后停止该服务端口监听（port 模式）并移除其全部接口。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "默认服务不可删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "ok": false,
+                  "error": "默认服务不可删除"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "服务不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "ok": false,
+                  "error": "服务不存在"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/services/{id}/basePath": {
+      "put": {
+        "tags": [
+          "服务分组"
+        ],
+        "summary": "修改服务 basePath 前缀（路径模式）",
+        "operationId": "updateBasePath",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "basePath"
+                ],
+                "properties": {
+                  "basePath": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]*$"
+                  }
+                }
+              },
+              "example": {
+                "basePath": "order"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "修改成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "service": {
+                      "$ref": "#/components/schemas/Service"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "默认服务不使用 basePath / 格式非法 / 保留前缀",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "服务不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "basePath 已被其他服务占用，或与默认服务接口路径首段冲突（会遮蔽该接口）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/services/{id}/proxy": {
+      "put": {
+        "tags": [
+          "服务分组"
+        ],
+        "summary": "设置代理穿透目标",
+        "operationId": "updateProxy",
+        "description": "配置后该服务未命中 Mock 接口的请求自动转发到 target（转发前剥离 host / content-length）。`target` 传 `null` 或空串清除。设置了 `POLYMOCK_PROXY_ALLOW` 白名单时，target 的 hostname 必须在白名单内。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "target"
+                ],
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "合法 http(s) URL，空串/null 表示清除"
+                  }
+                }
+              },
+              "examples": {
+                "设置": {
+                  "value": {
+                    "target": "http://localhost:3000"
+                  }
+                },
+                "清除": {
+                  "value": {
+                    "target": ""
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "设置成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "service": {
+                      "$ref": "#/components/schemas/Service"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "target 非合法 http(s) URL / 不在白名单内",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "服务不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/routes": {
+      "get": {
+        "tags": [
+          "接口管理"
+        ],
+        "summary": "接口列表",
+        "operationId": "listRoutes",
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按服务过滤；缺省返回全部"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "按创建时间升序",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "routes"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Route"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "接口管理"
+        ],
+        "summary": "注册接口",
+        "operationId": "createRoute",
+        "description": "path 以 / 开头，支持 `:param` 路径参数段；同一服务内形状冲突（含参数段互撞）返回 409。响应体支持模板占位符：`{{query.x}}` `{{header.x}}` `{{body.x}}` `{{params.x}}` `{{$id}}` `{{$now}}` `{{$int(a,b)}}` 及内置假数据 `{{$name}}` 等；对象 body 中占位符按字符串替换，文本 body（JSON 字符串）支持值位置注入。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutePayload"
+              },
+              "example": {
+                "name": "用户详情",
+                "method": "GET",
+                "path": "/api/users/:id",
+                "response": {
+                  "status": 200,
+                  "body": {
+                    "id": "{{params.id}}",
+                    "name": "{{$name}}"
+                  }
+                },
+                "variants": [
+                  {
+                    "name": "不存在",
+                    "match": {
+                      "query": [
+                        {
+                          "key": "missing",
+                          "value": "1"
+                        }
+                      ]
+                    },
+                    "response": {
+                      "status": 404,
+                      "body": {
+                        "error": "用户不存在"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "注册成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "route"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "route": {
+                      "$ref": "#/components/schemas/Route"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "method/path/name/serviceId/行为字段等参数不合法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "接口形状冲突（精确重复或路径参数互撞）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "ok": false,
+                  "error": "接口 GET /api/users/:id 与已有接口 GET /api/users/:uid 形状冲突"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "接口管理"
+        ],
+        "summary": "删除接口",
+        "operationId": "deleteRoute",
+        "parameters": [
+          {
+            "name": "method",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "注册时的完整路径（含 :param 段）"
+          },
+          {
+            "name": "serviceId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "default"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "缺少 method 或 path 参数",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "接口不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "ok": false,
+                  "error": "接口不存在"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/routes/{id}": {
+      "put": {
+        "tags": [
+          "接口管理"
+        ],
+        "summary": "更新接口（patch 语义）",
+        "operationId": "updateRoute",
+        "description": "只传需要修改的字段；`auth: null` 表示清除鉴权；`disabled/delayMs/jitterMs/failureRate/crud` 可单独作为 patch。serviceId 变更即移动服务分组。空 patch 返回 400。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutePatch"
+              },
+              "examples": {
+                "禁用": {
+                  "value": {
+                    "disabled": true
+                  }
+                },
+                "改响应": {
+                  "value": {
+                    "response": {
+                      "status": 404,
+                      "body": {
+                        "error": "not found"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "route": {
+                      "$ref": "#/components/schemas/Route"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段不合法或无可更新字段",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "接口不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "ok": false,
+                  "error": "接口不存在"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "更新后与同服务已有接口形状冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/requests": {
+      "get": {
+        "tags": [
+          "调试"
+        ],
+        "summary": "请求日志",
+        "operationId": "listRequests",
+        "description": "环形缓冲 500 条，按新到旧排序。记录命中接口与变体、代理穿透（proxied/proxyStatus/proxyBody）、失败原因（error）等。",
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "日志列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "requests"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "requests": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RequestLogEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "调试"
+        ],
+        "summary": "清空请求日志",
+        "operationId": "clearRequests",
+        "responses": {
+          "200": {
+            "description": "已清空",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/events": {
+      "get": {
+        "tags": [
+          "调试"
+        ],
+        "summary": "SSE 实时推送请求日志",
+        "operationId": "streamEvents",
+        "description": "`text/event-stream`；每条新日志以 `event: log` 推送，data 为日志条目 JSON；约 25s 心跳注释行保活。设置了管理令牌时可用 `?token=` 传参。",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "管理令牌（SSE 场景）"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE 流",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: log\ndata: {\"id\":\"...\",\"ts\":1789219377788,\"serviceId\":\"default\",\"method\":\"GET\",\"path\":\"/api/hello\",\"matched\":{\"routeId\":\"...\",\"variant\":null},\"status\":200,\"durationMs\":1}\n\n"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__polymock/settings": {
+      "get": {
+        "tags": [
+          "设置"
+        ],
+        "summary": "读取全局设置",
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "description": "当前设置",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "settings": {
+                      "$ref": "#/components/schemas/Settings"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "设置"
+        ],
+        "summary": "更新全局设置（全局场景集）",
+        "operationId": "updateSettings",
+        "description": "`activeVariant` 设为变体名后，所有拥有同名变体的接口强制命中该变体（绕过其条件）；空串或 `null` 清除。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "activeVariant": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              },
+              "examples": {
+                "启用": {
+                  "value": {
+                    "activeVariant": "异常场景"
+                  }
+                },
+                "清除": {
+                  "value": {
+                    "activeVariant": ""
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "settings": {
+                      "$ref": "#/components/schemas/Settings"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "activeVariant 需为字符串或 null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hello": {
+      "get": {
+        "tags": [
+          "Mock 分发"
+        ],
+        "summary": "默认播种的示例 Mock 接口",
+        "operationId": "mockHello",
+        "responses": {
+          "200": {
+            "description": "固定响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AdminToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-polymock-token",
+        "description": "设置 POLYMOCK_ADMIN_TOKEN 后必填；未设置时忽略"
+      }
+    },
+    "parameters": {
+      "ServiceId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "服务分组 id（默认服务固定为 default）"
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "参数错误",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "MockDispatch": {
+        "description": "Mock 分发响应：命中接口返回注册的状态码与响应体（模板渲染后）；条件不满足返回 400；未注册返回 404；认证失败 401；故障注入 500；配置代理时未命中转发上游",
+        "content": {
+          "application/json": {
+            "schema": {},
+            "examples": {
+              "命中": {
+                "value": {
+                  "id": "42",
+                  "name": "王伟"
+                }
+              },
+              "条件不满足": {
+                "value": {
+                  "ok": false,
+                  "error": "请求条件不满足：查询参数 tok 期望 abc，实际 xyz"
+                }
+              },
+              "未注册": {
+                "value": {
+                  "ok": false,
+                  "error": "未注册接口: GET /api/nope"
+                }
+              },
+              "故障注入": {
+                "value": {
+                  "ok": false,
+                  "error": "模拟故障注入"
+                }
+              },
+              "认证失败": {
+                "value": {
+                  "ok": false,
+                  "error": "认证失败：缺少 X-API-Key 头"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "OkEnvelope": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "ok",
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Service": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "port",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "description": "port 模式下的监听端口；path 模式为 0"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "proxyTarget": {
+            "type": "string",
+            "nullable": true,
+            "description": "代理穿透目标；未设置时不出现在响应中"
+          },
+          "basePath": {
+            "type": "string",
+            "nullable": true,
+            "description": "path 模式分发前缀"
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer",
+            "description": "该服务下接口数量"
+          }
+        }
+      },
+      "RequestCondition": {
+        "type": "object",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "字段名；headers 不区分大小写，body 支持点路径（如 user.id）"
+          },
+          "value": {
+            "type": "string",
+            "description": "期望值；空串表示仅要求 key 存在"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "json",
+              "array"
+            ],
+            "default": "string",
+            "description": "string=字符串化比对；number=数值比对；boolean=布尔比对；json=深度相等；array=无序包含匹配"
+          },
+          "required": {
+            "type": "boolean",
+            "default": true,
+            "description": "false 时 key 缺失视为通过（存在才比对）"
+          }
+        }
+      },
+      "RouteRequest": {
+        "type": "object",
+        "description": "预期请求条件组；requireMatch=true 时作为接口准入门槛，否则仅用于变体匹配",
+        "properties": {
+          "query": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestCondition"
+            }
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestCondition"
+            }
+          },
+          "body": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestCondition"
+            }
+          }
+        }
+      },
+      "RouteResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599,
+            "default": 200
+          },
+          "contentType": {
+            "type": "string",
+            "description": "响应 Content-Type；缺省 application/json"
+          },
+          "body": {
+            "description": "响应体；支持模板占位符"
+          }
+        }
+      },
+      "ResponseVariant": {
+        "type": "object",
+        "required": [
+          "name",
+          "response"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string",
+            "description": "变体名；全局场景集按名称强制命中"
+          },
+          "match": {
+            "$ref": "#/components/schemas/RouteRequest"
+          },
+          "response": {
+            "$ref": "#/components/schemas/RouteResponse"
+          }
+        }
+      },
+      "RouteAuth": {
+        "type": "object",
+        "required": [
+          "type",
+          "value"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "apikey",
+              "bearer"
+            ],
+            "description": "apikey=自定义 header 携带密钥；bearer=Authorization: Bearer"
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "header": {
+            "type": "string",
+            "description": "仅 apikey：携带密钥的 header 名，缺省 X-API-Key"
+          }
+        }
+      },
+      "SequenceStep": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "body": {}
+        }
+      },
+      "RoutePayload": {
+        "type": "object",
+        "required": [
+          "name",
+          "method",
+          "path"
+        ],
+        "properties": {
+          "serviceId": {
+            "type": "string",
+            "default": "default",
+            "description": "服务分组；不存在返回 400"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "method": {
+            "type": "string",
+            "description": "任意 HTTP 方法字符串，匹配时不区分大小写"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/",
+            "description": "以 / 开头；支持 :param 参数段"
+          },
+          "response": {
+            "$ref": "#/components/schemas/RouteResponse"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RouteRequest"
+          },
+          "requireMatch": {
+            "type": "boolean",
+            "description": "true 时所有请求必须满足 request 条件，否则 400"
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponseVariant"
+            },
+            "description": "按数组顺序匹配，第一个条件全部通过的生效"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/RouteAuth"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "delayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000
+          },
+          "jitterMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000,
+            "description": "实际延迟 = delayMs + rand(0..jitterMs)"
+          },
+          "failureRate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "按概率返回 500 模拟故障"
+          },
+          "sequence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SequenceStep"
+            },
+            "description": "按命中次序循环返回；优先于场景集/变体/默认响应"
+          },
+          "crud": {
+            "type": "boolean",
+            "description": "有状态 CRUD：路径需含 :id 参数段；内存维护，重启清空"
+          }
+        }
+      },
+      "RoutePatch": {
+        "description": "PATCH 语义：仅提供需要修改的字段",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RoutePayload"
+          }
+        ]
+      },
+      "Route": {
+        "type": "object",
+        "required": [
+          "id",
+          "serviceId",
+          "protocol",
+          "method",
+          "path",
+          "response",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "serviceId": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "http"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "response": {
+            "$ref": "#/components/schemas/RouteResponse"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RouteRequest"
+          },
+          "requireMatch": {
+            "type": "boolean"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/RouteAuth"
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponseVariant"
+            }
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "delayMs": {
+            "type": "integer"
+          },
+          "jitterMs": {
+            "type": "integer"
+          },
+          "failureRate": {
+            "type": "number"
+          },
+          "sequence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SequenceStep"
+            }
+          },
+          "crud": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Settings": {
+        "type": "object",
+        "properties": {
+          "activeVariant": {
+            "type": "string",
+            "nullable": true,
+            "description": "全局场景集：非空时强制命中同名变体"
+          }
+        }
+      },
+      "RequestLogEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "ts",
+          "serviceId",
+          "method",
+          "path",
+          "matched",
+          "status",
+          "durationMs"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "serviceId": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "matched": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "routeId": {
+                "type": "string"
+              },
+              "variant": {
+                "type": "string",
+                "nullable": true,
+                "description": "命中的变体名；默认响应为 null；序列响应为 序列#n"
+              }
+            }
+          },
+          "proxied": {
+            "type": "boolean",
+            "description": "走了代理转发"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string",
+            "description": "失败原因（requireMatch 未满足 / 代理失败等）"
+          },
+          "durationMs": {
+            "type": "integer"
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "bodyPreview": {
+            "type": "string",
+            "description": "请求体 JSON 序列化后截断 500 字符"
+          },
+          "proxyStatus": {
+            "type": "integer",
+            "description": "上游响应状态码"
+          },
+          "proxyBody": {
+            "type": "string",
+            "description": "上游响应体预览（截断 5000 字符）"
+          }
+        }
+      }
+    }
+  }
+}

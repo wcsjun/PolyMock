@@ -1,0 +1,5108 @@
+{
+  "info": {
+    "_postman_id": "b7e1d0a2-6f3c-4e8a-9a5e-polymock0001",
+    "name": "PolyMock 接口功能测试",
+    "description": "PolyMock 全功能黑盒测试集（管理 API + Mock 分发语义），覆盖 6 大类约 100 项断言，port / path 两种模式实例均可一键整册运行。\n\n## 使用方法\n1. 修改集合变量 baseUrl 指向被测实例（默认 http://localhost:33233），用 Runner 从上到下整册运行。\n2. A 组 meta 会检测实例运行模式：B1（端口模式专项）与 B2（路径模式专项）自动二选一执行，另一组在结果里显示 skipped 属正常（依赖 Postman v10.14+ 的 skipRequest）。\n3. 顺序敏感：序列响应/自增计数/CRUD 状态都有先后依赖，务必整册顺序运行。\n4. 「F-代理穿透」依赖外网 httpbin.org；离线环境跳过该组。\n5. 实例设置了 POLYMOCK_ADMIN_TOKEN 时，把令牌填入集合变量 adminToken（自动附加请求头）。\n6. 结束后「Z-清理测试数据」会把本轮注册的接口与服务全部删除并还原设置。\n\n## 运行前置条件\n- 不要把 polymock.openapi.json 契约导入到被测实例后直接跑本集合（详见该文件说明）。\n- 手工单发时请按分组顺序，并保持同一会话（runId 在集合变量中持续有效，跨会话会重新生成）。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:33233"
+    },
+    {
+      "key": "subPort",
+      "value": "34101"
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "upstream",
+      "value": "https://httpbin.org/anything"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// 可选管理令牌：在集合变量 adminToken 填写后自动附加到所有 /__polymock 请求",
+          "pm.request.headers.remove('x-polymock-token');",
+          "const tok = pm.collectionVariables.get('adminToken');",
+          "if (tok) { pm.request.headers.add({ key: 'x-polymock-token', value: tok }); }",
+          "// 每轮运行生成一次性后缀，注册路径互不冲突，可重复执行",
+          "if (!pm.collectionVariables.get('runId')) {",
+          "  const r = Math.random().toString(36).slice(2, 8);",
+          "  pm.collectionVariables.set('runId', r);",
+          "  ['echo', 'variant', 'req', 'seq', 'scen', 'tpl', 'delay', 'fail', 'auth', 'html', 'dis', 'cruda', 'crudi', 'submock'].forEach(n => pm.collectionVariables.set(n + 'Path', 'api/pm-' + r + '-' + n));",
+          "  pm.collectionVariables.set('scenVbName', 'pm-vb-' + r);",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "A-基础连通",
+      "description": {
+        "content": "meta / Web UI / 默认路由 / 404 语义（meta 检测运行模式，B1/B2 据此自动跳过）",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "元信息 meta",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/meta",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "meta"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "pm.collectionVariables.set('mode', b.mode);",
+                  "pm.collectionVariables.set('mainPort', b.mainPort);",
+                  "pm.test('mode 为 port 或 path', () => pm.expect(['port','path']).to.include(b.mode));",
+                  "pm.test('mainPort 为数字', () => pm.expect(b.mainPort).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Web UI 首页",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": []
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('返回 HTML', () => pm.expect(pm.response.headers.get('content-type')).to.include('text/html'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "默认路由 /api/hello",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/hello",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "hello"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message 正确', () => pm.expect(pm.response.json().message).to.eql('Hello from PolyMock'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "未注册接口 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pm-{{runId}}-notexist",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pm-{{runId}}-notexist"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「未注册接口」', () => pm.expect(String(pm.response.json().error || '')).to.include('未注册接口'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "B-服务分组",
+      "description": {
+        "content": "新建、列表、重名 409、空名 400、删除不存在 404、默认服务禁删 400",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "新建子服务（port 模式传端口，path 模式自动生成 basePath）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-svc-{{runId}}\",\n  \"port\": \"{{subPort}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const b = pm.response.json();",
+                  "if (b.service) {",
+                  "  pm.collectionVariables.set('svcId', b.service.id);",
+                  "  pm.collectionVariables.set('subBasePath', b.service.basePath || '');",
+                  "  const sub = b.service.port > 0 ? ('http://localhost:' + b.service.port) : (pm.variables.get('baseUrl') + '/' + (b.service.basePath || ''));",
+                  "  pm.collectionVariables.set('subBaseUrl', sub);",
+                  "}",
+                  "pm.test('服务 id 已保存', () => pm.expect(pm.collectionVariables.get('svcId')).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "服务列表（含默认服务与子服务）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const list = pm.response.json().services;",
+                  "pm.test('默认服务 isDefault/running', () => pm.expect(list.some(s => s.id === 'default' && s.isDefault === true && s.running === true)).to.be.true);",
+                  "pm.test('子服务已创建且运行中', () => pm.expect(list.some(s => s.id === pm.collectionVariables.get('svcId') && s.running === true)).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "重名冲突 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-svc-{{runId}}\",\n  \"port\": 34211\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「已存在」', () => pm.expect(String(pm.response.json().error || '')).to.include('已存在'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "空名称 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "删除不存在服务 404（旧版本返回 200，说明实例未更新）",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/no-such-{{runId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "no-such-{{runId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「服务不存在」', () => pm.expect(String(pm.response.json().error || '')).to.include('服务不存在'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "默认服务不可删除 400",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "default"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「默认服务」', () => pm.expect(String(pm.response.json().error || '')).to.include('默认服务'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "B1-端口模式专项",
+      "description": {
+        "content": "仅 port 模式实例执行；path 模式实例自动跳过（依赖 A 组 meta 的 mode 变量）",
+        "type": "text/plain"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.collectionVariables.get('mode') !== 'port') {",
+              "  if (pm.execution && typeof pm.execution.skipRequest === 'function') { pm.execution.skipRequest(); }",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "端口非整数 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-bad-{{runId}}\",\n  \"port\": \"abc\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "端口超范围 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-bad-{{runId}}\",\n  \"port\": 99999\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "端口与主服务冲突 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-bad-{{runId}}\",\n  \"port\": \"{{mainPort}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「冲突」', () => pm.expect(String(pm.response.json().error || '')).to.include('冲突'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "端口被其他服务占用 409（依赖前面已创建 {{subPort}} 子服务）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-bad2-{{runId}}\",\n  \"port\": \"{{subPort}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「已被其他服务占用」', () => pm.expect(String(pm.response.json().error || '')).to.include('已被其他服务占用'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "B2-路径模式专项",
+      "description": {
+        "content": "仅 path 模式实例（Docker）执行；port 模式实例自动跳过（依赖 A 组 meta 的 mode 变量）",
+        "type": "text/plain"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.collectionVariables.get('mode') !== 'path') {",
+              "  if (pm.execution && typeof pm.execution.skipRequest === 'function') { pm.execution.skipRequest(); }",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "basePath 保留前缀 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-r2-{{runId}}\",\n  \"basePath\": \"__polymock\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「保留前缀」', () => pm.expect(String(pm.response.json().error || '')).to.include('保留前缀'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "basePath 非法格式 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-r2-{{runId}}\",\n  \"basePath\": \"Bad_Path!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "basePath 与默认服务接口首段冲突 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-r2-{{runId}}\",\n  \"basePath\": \"api\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "第二个服务自动 basePath 201",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-svc2-{{runId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const b = pm.response.json();",
+                  "if (b.service) pm.collectionVariables.set('svcId2', b.service.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "basePath 与其他服务重复 409",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId2}}/basePath",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId2}}",
+                "basePath"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"basePath\": \"{{subBasePath}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "默认服务接口首段被 basePath 遮蔽 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serviceId\": \"default\",\n  \"name\": \"pm-shadow-{{runId}}\",\n  \"method\": \"GET\",\n  \"path\": \"/{{subBasePath}}/x\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「遮蔽」', () => pm.expect(String(pm.response.json().error || '')).to.include('遮蔽'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "删除第二个服务（自清理）",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId2}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId2}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C-接口注册与参数校验",
+      "description": {
+        "content": "注册/重复 409/参数校验 400/更新/删除语义",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "注册 echo 接口 201",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-echo\",\n  \"method\": \"POST\",\n  \"path\": \"/{{echoPath}}\",\n  \"response\": {\n    \"status\": 201,\n    \"body\": {\n      \"got\": \"{{body.x}}\",\n      \"via\": \"echo\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const b = pm.response.json();",
+                  "if (b.route) pm.collectionVariables.set('echoRouteId', b.route.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "形状完全重复 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-echo-dup\",\n  \"method\": \"POST\",\n  \"path\": \"/{{echoPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「形状冲突」', () => pm.expect(String(pm.response.json().error || '')).to.include('形状冲突'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "缺名称 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"GET\",\n  \"path\": \"/{{echoPath}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "path 不以 / 开头 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-bad\",\n  \"method\": \"GET\",\n  \"path\": \"abc\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "路径参数段仅冒号 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-bad\",\n  \"method\": \"GET\",\n  \"path\": \"/x/:\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「非法」', () => pm.expect(String(pm.response.json().error || '')).to.include('非法'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册参数路由 :a 201",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-col-a\",\n  \"method\": \"GET\",\n  \"path\": \"/api/pm-{{runId}}-col/:a\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"got\": \"a\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "参数段互撞 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-col-b\",\n  \"method\": \"GET\",\n  \"path\": \"/api/pm-{{runId}}-col/:b\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"got\": \"b\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「形状冲突」', () => pm.expect(String(pm.response.json().error || '')).to.include('形状冲突'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "更新接口（改名）200",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{echoRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{echoRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-echo-renamed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "pm.test('名称已更新', () => pm.expect(pm.response.json().route.name).to.eql('pm-echo-renamed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "更新不存在接口 404",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/no-such-route",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "no-such-route"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"x\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "空 patch 400",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{echoRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{echoRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「没有可更新的字段」', () => pm.expect(String(pm.response.json().error || '')).to.include('没有可更新的字段'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "删除不存在接口 404（旧版本返回 200，说明实例未更新）",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/api/pm-{{runId}}-never",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/api/pm-{{runId}}-never"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「接口不存在」', () => pm.expect(String(pm.response.json().error || '')).to.include('接口不存在'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "删除缺参数 400",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "D-Mock 响应行为",
+      "description": {
+        "content": "模板、变体条件、requireMatch、序列、场景集、延迟、故障、认证、contentType、禁用",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "echo 调用：201 + 模板回显（对象内占位符按设计字符串化）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{echoPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{echoPath}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"x\": 42\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('got 字符串化回显', () => pm.expect(pm.response.json().got).to.eql('42'));",
+                  "pm.test('via=echo', () => pm.expect(pm.response.json().via).to.eql('echo'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "echo 方法未注册 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{echoPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{echoPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「未注册接口」', () => pm.expect(String(pm.response.json().error || '')).to.include('未注册接口'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册变体接口（6 种比对类型）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-variant\",\n  \"method\": \"POST\",\n  \"path\": \"/{{variantPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"tier\": \"std\"\n    }\n  },\n  \"variants\": [\n    {\n      \"name\": \"v-vip\",\n      \"match\": {\n        \"query\": [\n          {\n            \"key\": \"level\",\n            \"value\": \"vip\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"tier\": \"vip\"\n        }\n      }\n    },\n    {\n      \"name\": \"v-num\",\n      \"match\": {\n        \"query\": [\n          {\n            \"key\": \"n\",\n            \"value\": \"10\",\n            \"type\": \"number\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"tier\": \"num\"\n        }\n      }\n    },\n    {\n      \"name\": \"v-bool\",\n      \"match\": {\n        \"query\": [\n          {\n            \"key\": \"flag\",\n            \"value\": \"true\",\n            \"type\": \"boolean\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"tier\": \"bool\"\n        }\n      }\n    },\n    {\n      \"name\": \"v-json\",\n      \"match\": {\n        \"body\": [\n          {\n            \"key\": \"a.b\",\n            \"value\": \"{\\\"c\\\":[1,2]}\",\n            \"type\": \"json\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"tier\": \"json\"\n        }\n      }\n    },\n    {\n      \"name\": \"v-arr\",\n      \"match\": {\n        \"body\": [\n          {\n            \"key\": \"tags\",\n            \"value\": \"[2,1]\",\n            \"type\": \"array\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"tier\": \"arr\"\n        }\n      }\n    },\n    {\n      \"name\": \"v-hdr\",\n      \"match\": {\n        \"headers\": [\n          {\n            \"key\": \"x-token\",\n            \"value\": \"\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"tier\": \"hdr\"\n        }\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('6 个变体', () => pm.expect(pm.response.json().route.variants).to.have.length(6));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：string 命中",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}?level=vip",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "vip"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=vip', () => pm.expect(pm.response.json().tier).to.eql('vip'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：number 数值比对（10.0）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}?n=10.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ],
+              "query": [
+                {
+                  "key": "n",
+                  "value": "10.0"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=num', () => pm.expect(pm.response.json().tier).to.eql('num'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：boolean 类型比对",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}?flag=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ],
+              "query": [
+                {
+                  "key": "flag",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=bool', () => pm.expect(pm.response.json().tier).to.eql('bool'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：json 深度相等（点路径 a.b）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"a\": {\n    \"b\": {\n      \"c\": [\n        1,\n        2\n      ]\n    },\n    \"z\": 9\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=json', () => pm.expect(pm.response.json().tier).to.eql('json'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：array 无序包含",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tags\": [\n    3,\n    2,\n    1\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=arr', () => pm.expect(pm.response.json().tier).to.eql('arr'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：header 存在性（空值+大小写不敏感）",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Token",
+                "value": "whatever"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=hdr', () => pm.expect(pm.response.json().tier).to.eql('hdr'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "变体：全不命中走默认",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}?other=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ],
+              "query": [
+                {
+                  "key": "other",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=std', () => pm.expect(pm.response.json().tier).to.eql('std'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册 requireMatch 接口（必填 tok + 选填 extra）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-req\",\n  \"method\": \"GET\",\n  \"path\": \"/{{reqPath}}\",\n  \"request\": {\n    \"query\": [\n      {\n        \"key\": \"tok\",\n        \"value\": \"abc\"\n      },\n      {\n        \"key\": \"extra\",\n        \"value\": \"e\",\n        \"required\": false\n      }\n    ]\n  },\n  \"requireMatch\": true,\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"pass\": true\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "requireMatch：不满足 400 并说明原因",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{reqPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{reqPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「请求条件不满足」', () => pm.expect(String(pm.response.json().error || '')).to.include('请求条件不满足'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "requireMatch：必填满足（选填缺失）200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{reqPath}}?tok=abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{reqPath}}"
+              ],
+              "query": [
+                {
+                  "key": "tok",
+                  "value": "abc"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('pass=true', () => pm.expect(pm.response.json().pass === true).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "requireMatch：选填存在但值不符 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{reqPath}}?tok=abc&extra=zzz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{reqPath}}"
+              ],
+              "query": [
+                {
+                  "key": "tok",
+                  "value": "abc"
+                },
+                {
+                  "key": "extra",
+                  "value": "zzz"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册序列响应接口",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-seq\",\n  \"method\": \"GET\",\n  \"path\": \"/{{seqPath}}\",\n  \"sequence\": [\n    {\n      \"status\": 200,\n      \"body\": {\n        \"seq\": 1\n      }\n    },\n    {\n      \"status\": 201,\n      \"body\": {\n        \"seq\": 2\n      }\n    },\n    {\n      \"status\": 503,\n      \"body\": {\n        \"seq\": 3\n      }\n    }\n  ],\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"seq\": 0\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "序列第 1 次 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{seqPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{seqPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('seq=1', () => pm.expect(pm.response.json().seq).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "序列第 2 次 201",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{seqPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{seqPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('seq=2', () => pm.expect(pm.response.json().seq).to.eql(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "序列第 3 次 503",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{seqPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{seqPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 503', () => pm.response.to.have.status(503));",
+                  "pm.test('seq=3', () => pm.expect(pm.response.json().seq).to.eql(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "序列循环回第 1 次 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{seqPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{seqPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('seq=1（循环）', () => pm.expect(pm.response.json().seq).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册场景集用接口（变体名含一次性后缀）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-scen\",\n  \"method\": \"GET\",\n  \"path\": \"/{{scenPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"scen\": \"std\"\n    }\n  },\n  \"variants\": [\n    {\n      \"name\": \"pm-va-{{runId}}\",\n      \"match\": {\n        \"query\": [\n          {\n            \"key\": \"m\",\n            \"value\": \"1\"\n          }\n        ]\n      },\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"scen\": \"a\"\n        }\n      }\n    },\n    {\n      \"name\": \"{{scenVbName}}\",\n      \"response\": {\n        \"status\": 200,\n        \"body\": {\n          \"scen\": \"b\"\n        }\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "条件变体正常命中 a",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{scenPath}}?m=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{scenPath}}"
+              ],
+              "query": [
+                {
+                  "key": "m",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('scen=a', () => pm.expect(pm.response.json().scen).to.eql('a'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "设置全局场景集 → 强制命中同名变体 b（绕过条件）",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"activeVariant\": \"{{scenVbName}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "pm.test('activeVariant 已保存', () => pm.expect(pm.response.json().settings.activeVariant).to.eql(pm.collectionVariables.get('scenVbName')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "场景集下无参数请求命中 b",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{scenPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{scenPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('scen=b', () => pm.expect(pm.response.json().scen).to.eql('b'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "无同名变体的接口不受场景集影响",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{variantPath}}?level=vip",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{variantPath}}"
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "vip"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tier=vip', () => pm.expect(pm.response.json().tier).to.eql('vip'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清空场景集 → 恢复条件变体 a",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"activeVariant\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "pm.collectionVariables.set('pendingVerify', 'scen-restore');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "恢复后 ?m=1 命中 a",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{scenPath}}?m=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{scenPath}}"
+              ],
+              "query": [
+                {
+                  "key": "m",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('scen=a', () => pm.expect(pm.response.json().scen).to.eql('a'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "activeVariant 非字符串 400",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"activeVariant\": 123\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册模板接口",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-tpl\",\n  \"method\": \"POST\",\n  \"path\": \"/{{tplPath}}/:uid\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"uid\": \"{{params.uid}}\",\n      \"q\": \"{{query.q}}\",\n      \"h\": \"{{header.x-pm-h}}\",\n      \"b\": \"{{body.name}}\",\n      \"n\": \"{{$id}}\",\n      \"keep\": \"{{nope.x}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "模板渲染：params/query/header/body/{{$id}}/未知占位符保留",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-PM-H",
+                "value": "HV"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{tplPath}}/77?q=hello",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{tplPath}}",
+                "77"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "hello"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('params/query/header/body 渲染', () => pm.expect(b.uid === '77' && b.q === 'hello' && b.h === 'HV' && b.b === 'pm').to.be.true);",
+                  "pm.test('{{$id}} 首次为 1', () => pm.expect(b.n).to.eql('1'));",
+                  "pm.test('未知占位符原样保留', () => pm.expect(b.keep).to.eql('{{nope.x}}'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "模板 {{$id}} 跨请求自增",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{tplPath}}/78?q=x",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{tplPath}}",
+                "78"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "x"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('n=2', () => pm.expect(pm.response.json().n).to.eql('2'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册延迟接口（delayMs=300）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-delay\",\n  \"method\": \"GET\",\n  \"path\": \"/{{delayPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  },\n  \"delayMs\": 300\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "延迟生效（实测 >= 280ms）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{delayPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{delayPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('耗时 >= 280ms', () => pm.expect(pm.response.responseTime).to.be.at.least(280));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册故障接口（failureRate=100）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-fail\",\n  \"method\": \"GET\",\n  \"path\": \"/{{failPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"ok\": true\n    }\n  },\n  \"failureRate\": 100\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const b = pm.response.json();",
+                  "if (b.route) pm.collectionVariables.set('failRouteId', b.route.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "故障注入 500",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{failPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{failPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 500', () => pm.response.to.have.status(500));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「故障注入」', () => pm.expect(String(pm.response.json().error || '')).to.include('故障注入'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "更新 failureRate=0",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{failRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{failRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"failureRate\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "failureRate=0 恢复 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{failPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{failPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册 apikey 鉴权接口",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-auth\",\n  \"method\": \"GET\",\n  \"path\": \"/{{authPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"secret\": 1\n    }\n  },\n  \"auth\": {\n    \"type\": \"apikey\",\n    \"value\": \"pm-k1\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const b = pm.response.json();",
+                  "if (b.route) pm.collectionVariables.set('authRouteId', b.route.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "apikey：缺头 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「缺少 X-API-Key」', () => pm.expect(String(pm.response.json().error || '')).to.include('缺少 X-API-Key'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "apikey：错误值 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "wrong"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「不正确」', () => pm.expect(String(pm.response.json().error || '')).to.include('不正确'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "apikey：正确值 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "pm-k1"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('secret=1', () => pm.expect(pm.response.json().secret === 1).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT auth 自定义 header（X-Custom-Key）",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{authRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{authRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"auth\": {\n    \"type\": \"apikey\",\n    \"value\": \"pm-k2\",\n    \"header\": \"X-Custom-Key\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "自定义 header 正确 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Custom-Key",
+                "value": "pm-k2"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "旧 header 名不再通过 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "pm-k2"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT auth 改为 bearer",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{authRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{authRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"auth\": {\n    \"type\": \"bearer\",\n    \"value\": \"pm-tk\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "bearer：缺 Authorization 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error 含「缺少 Authorization」', () => pm.expect(String(pm.response.json().error || '')).to.include('缺少 Authorization'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "bearer：错误令牌 401 + WWW-Authenticate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer wrong"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('WWW-Authenticate: Bearer', () => pm.expect(pm.response.headers.get('www-authenticate')).to.eql('Bearer'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "bearer：正确令牌 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer pm-tk"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT auth=null 清除鉴权",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{authRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{authRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"auth\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清除后免鉴权 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{authPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{authPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册自定义 contentType 接口",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-html\",\n  \"method\": \"GET\",\n  \"path\": \"/{{htmlPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"contentType\": \"text/html; charset=utf-8\",\n    \"body\": {\n      \"ok\": 1\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "自定义 contentType 生效",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{htmlPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{htmlPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('content-type 为 text/html', () => pm.expect(pm.response.headers.get('content-type')).to.include('text/html'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册禁用测试接口（保存 id）",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-dis\",\n  \"method\": \"GET\",\n  \"path\": \"/{{disPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"on\": 1\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const b = pm.response.json();",
+                  "if (b.route) pm.collectionVariables.set('disRouteId', b.route.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "禁用前可访问 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{disPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{disPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT disabled=true",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{disRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{disRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "禁用后视为未注册 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{disPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{disPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error 含「未注册接口」', () => pm.expect(String(pm.response.json().error || '')).to.include('未注册接口'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "E-有状态 CRUD",
+      "description": {
+        "content": "集合/条目全流程（内存态，重启清空）",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "注册 CRUD：POST 集合",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-crud-c\",\n  \"method\": \"POST\",\n  \"path\": \"/{{crudaPath}}\",\n  \"crud\": true,\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册 CRUD：GET 集合",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-crud-l\",\n  \"method\": \"GET\",\n  \"path\": \"/{{crudaPath}}\",\n  \"crud\": true,\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册 CRUD：GET 条目",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-crud-g\",\n  \"method\": \"GET\",\n  \"path\": \"/{{crudaPath}}/:id\",\n  \"crud\": true,\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册 CRUD：PUT 条目",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-crud-p\",\n  \"method\": \"PUT\",\n  \"path\": \"/{{crudaPath}}/:id\",\n  \"crud\": true,\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册 CRUD：DELETE 条目",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pm-crud-d\",\n  \"method\": \"DELETE\",\n  \"path\": \"/{{crudaPath}}/:id\",\n  \"crud\": true,\n  \"response\": {\n    \"status\": 200,\n    \"body\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD POST 自动生成 rec-N",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"a\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set('crudRecId', b.id);",
+                  "pm.test('id 形如 rec-N', () => pm.expect(b.id).to.match(/^rec-\\d+$/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD POST 保留显式 id",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"pm-x1\",\n  \"name\": \"b\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.test('id=pm-x1', () => pm.expect(pm.response.json().id).to.eql('pm-x1'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD GET 集合返回 2 条",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('列表 2 条', () => pm.expect(pm.response.json()).to.have.length(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD PUT 浅合并且保留 id",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}/pm-x1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}",
+                "pm-x1"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"b2\",\n  \"extra\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('合并且 id 不变', () => pm.expect(b.name === 'b2' && b.extra === true && b.id === 'pm-x1').to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD GET 不存在资源 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}/nope",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}",
+                "nope"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error 含「资源不存在」', () => pm.expect(String(pm.response.json().error || '')).to.include('资源不存在'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD DELETE 200",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}/pm-x1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}",
+                "pm-x1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CRUD 删除后 GET 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{crudaPath}}/pm-x1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{crudaPath}}",
+                "pm-x1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "F-代理穿透（子服务）",
+      "description": {
+        "content": "需外网 httpbin.org",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "设置 proxyTarget（httpbin，需外网）",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId}}/proxy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId}}",
+                "proxy"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"{{upstream}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "未命中接口穿透上游 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{subBaseUrl}}/api/pm-{{runId}}-up?from=pm",
+              "host": [
+                "{{subBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pm-{{runId}}-up"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "pm"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('args.from=pm（已到上游）', () => pm.expect(pm.response.json().args.from).to.eql('pm'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册子服务 Mock 接口",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serviceId\": \"{{svcId}}\",\n  \"name\": \"pm-sub\",\n  \"method\": \"GET\",\n  \"path\": \"/{{submockPath}}\",\n  \"response\": {\n    \"status\": 200,\n    \"body\": {\n      \"from\": \"mock\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "if (b.route) pm.collectionVariables.set('subRouteId', b.route.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "命中 Mock 时不走代理",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{subBaseUrl}}/{{submockPath}}",
+              "host": [
+                "{{subBaseUrl}}"
+              ],
+              "path": [
+                "{{submockPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('来自 Mock', () => pm.expect(pm.response.json().from).to.eql('mock'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT 子接口 disabled=true",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{subRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{subRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "禁用路由后穿透到上游",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{subBaseUrl}}/{{submockPath}}",
+              "host": [
+                "{{subBaseUrl}}"
+              ],
+              "path": [
+                "{{submockPath}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('已到上游（含 url 字段）', () => pm.expect(pm.response.json().url).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT 子接口恢复 enabled",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes/{{subRouteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes",
+                "{{subRouteId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disabled\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "改为不可达目标（127.0.0.1:9）",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId}}/proxy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId}}",
+                "proxy"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"http://127.0.0.1:9\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "上游不可达 502",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{subBaseUrl}}/api/pm-{{runId}}-down",
+              "host": [
+                "{{subBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pm-{{runId}}-down"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 502', () => pm.response.to.have.status(502));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);",
+                  "pm.test('error 含「代理请求失败」', () => pm.expect(String(pm.response.json().error || '')).to.include('代理请求失败'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "非法协议 target 400",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId}}/proxy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId}}",
+                "proxy"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"ftp://x.example\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('ok=false', () => pm.expect(pm.response.json().ok).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清空 proxyTarget → 恢复 404",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId}}/proxy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId}}",
+                "proxy"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清空后未命中接口 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{subBaseUrl}}/api/pm-{{runId}}-up",
+              "host": [
+                "{{subBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pm-{{runId}}-up"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error 含「未注册接口」', () => pm.expect(String(pm.response.json().error || '')).to.include('未注册接口'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "G-日志与收尾",
+      "description": {
+        "content": "日志字段/过滤/清空，恢复全局设置",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "请求日志非空且字段完整",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "requests"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);",
+                  "const logs = pm.response.json().requests;",
+                  "pm.test('有日志', () => pm.expect(logs.length).to.be.above(0));",
+                  "pm.test('字段完整', () => pm.expect(logs.every(l => typeof l.method === 'string' && typeof l.status === 'number' && typeof l.durationMs === 'number')).to.be.true);",
+                  "pm.test('序列命中标注 序列#n', () => pm.expect(logs.some(l => l.path === '/' + pm.collectionVariables.get('seqPath') && String((l.matched || {}).variant || '').indexOf('序列#') === 0)).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "日志 limit 过滤",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/requests?limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "requests"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('不超过 5 条', () => pm.expect(pm.response.json().requests.length).to.be.at.most(5));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "读取全局设置",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "settings"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "恢复全局设置为 null",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"activeVariant\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清空请求日志",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "requests"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清空后日志为空",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "requests"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('日志为空', () => pm.expect(pm.response.json().requests).to.have.length(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Z-清理测试数据",
+      "description": {
+        "content": "删除本轮注册的全部接口与服务",
+        "type": "text/plain"
+      },
+      "item": [
+        {
+          "name": "清理 POST /{{echoPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=POST&path=/{{echoPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "POST"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{echoPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 POST /{{variantPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=POST&path=/{{variantPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "POST"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{variantPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{reqPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{reqPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{reqPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{seqPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{seqPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{seqPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{scenPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{scenPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{scenPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 POST /{{tplPath}}/:uid",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=POST&path=/{{tplPath}}/:uid&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "POST"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{tplPath}}/:uid"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{delayPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{delayPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{delayPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{failPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{failPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{failPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{authPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{authPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{authPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{htmlPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{htmlPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{htmlPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{disPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{disPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{disPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /api/pm-{{runId}}-col/:a",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/api/pm-{{runId}}-col/:a&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/api/pm-{{runId}}-col/:a"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 POST /{{crudaPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=POST&path=/{{crudaPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "POST"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{crudaPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{crudaPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{crudaPath}}&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{crudaPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{crudaPath}}/:id",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{crudaPath}}/:id&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{crudaPath}}/:id"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 PUT /{{crudaPath}}/:id",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=PUT&path=/{{crudaPath}}/:id&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "PUT"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{crudaPath}}/:id"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 DELETE /{{crudaPath}}/:id",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=DELETE&path=/{{crudaPath}}/:id&serviceId=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "DELETE"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{crudaPath}}/:id"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理 GET /{{submockPath}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/routes?method=GET&path=/{{submockPath}}&serviceId={{svcId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "method",
+                  "value": "GET"
+                },
+                {
+                  "key": "path",
+                  "value": "/{{submockPath}}"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "{{svcId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "清理：删除子服务",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/__polymock/services/{{svcId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "__polymock",
+                "services",
+                "{{svcId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ok=true', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
