@@ -15,6 +15,7 @@ import OpenApiImport from './components/OpenApiImport.vue';
 import RequestLogPanel from './components/RequestLogPanel.vue';
 import RouteForm from './components/RouteForm.vue';
 import ServicePanel from './components/ServicePanel.vue';
+import { clampDrawerWidth, clearDrawerWidth, loadDrawerWidth, saveDrawerWidth } from './utils';
 import type { PolyMockMode, Route, ServiceInfo, ToastKind, ViewName } from './types';
 
 const VIEW_KEY = 'polymock:view';
@@ -113,6 +114,7 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 onMounted(() => {
   void loadAll();
   void loadSettings();
+  drawerWidth.value = loadDrawerWidth(window.innerWidth);
   pollTimer = setInterval(() => {
     if (!document.hidden) void loadAll();
   }, POLL_INTERVAL);
@@ -166,6 +168,56 @@ function closeDrawer() {
 function onFormChanged() {
   void loadAll();
   closeDrawer();
+}
+
+/* ---------- 抽屉宽度拖拽（左缘手柄，localStorage 记忆） ---------- */
+
+const drawerPanelEl = ref<HTMLElement | null>(null);
+const drawerRzEl = ref<HTMLElement | null>(null);
+/** null = 使用 CSS 默认宽度 */
+const drawerWidth = ref<number | null>(null);
+
+function resetDrawerWidth() {
+  drawerWidth.value = null;
+  clearDrawerWidth();
+}
+
+function onDrawerRzDown(event: PointerEvent) {
+  event.preventDefault();
+  const handle = drawerRzEl.value;
+  const panel = drawerPanelEl.value;
+  if (!handle || !panel) return;
+
+  const startX = event.clientX;
+  const startW = drawerWidth.value ?? panel.offsetWidth;
+
+  handle.setPointerCapture(event.pointerId);
+  handle.classList.add('active');
+  document.body.classList.add('drawer-resizing');
+
+  const onMove = (ev: PointerEvent) => {
+    drawerWidth.value = clampDrawerWidth(startW + (startX - ev.clientX), window.innerWidth);
+  };
+  const onUp = () => {
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onUp);
+    handle.removeEventListener('pointercancel', onUp);
+    handle.classList.remove('active');
+    document.body.classList.remove('drawer-resizing');
+    if (drawerWidth.value !== null) saveDrawerWidth(drawerWidth.value);
+  };
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', onUp);
+  handle.addEventListener('pointercancel', onUp);
+}
+
+function onDrawerRzKeydown(event: KeyboardEvent) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  const base = drawerWidth.value ?? drawerPanelEl.value?.offsetWidth ?? 0;
+  if (!base) return;
+  drawerWidth.value = clampDrawerWidth(base + (event.key === 'ArrowLeft' ? -16 : 16), window.innerWidth);
+  saveDrawerWidth(drawerWidth.value);
 }
 
 /* ---------- OpenAPI 导入抽屉 ---------- */
@@ -397,7 +449,26 @@ function onSidebarRzDown(event: PointerEvent) {
   <!-- 新增/编辑接口抽屉 -->
   <div v-show="drawerOpen">
     <div class="drawer-mask" @click="closeDrawer"></div>
-    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-label="接口编辑表单">
+    <aside
+      ref="drawerPanelEl"
+      class="drawer-panel"
+      :style="drawerWidth === null ? undefined : { width: `${drawerWidth}px` }"
+      role="dialog"
+      aria-modal="true"
+      aria-label="接口编辑表单"
+    >
+      <div
+        ref="drawerRzEl"
+        class="drawer-rz"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖拽调整抽屉宽度，双击恢复默认"
+        title="拖拽调整宽度，双击恢复默认"
+        tabindex="0"
+        @pointerdown="onDrawerRzDown"
+        @dblclick="resetDrawerWidth"
+        @keydown="onDrawerRzKeydown"
+      ></div>
       <RouteForm
         :services="services"
         :editing="editingRoute"
