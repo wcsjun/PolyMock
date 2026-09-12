@@ -1,13 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildCurl,
+  clampDrawerWidth,
+  clearDrawerWidth,
   isTemplateJsonValid,
   buildFetchSnippet,
   bodyRowsToJsonValue,
   buildRouteRequest,
   jsonValueToBodyRows,
+  loadDrawerWidth,
   parseSequenceDraft,
+  saveDrawerWidth,
   sequenceToDraftText,
+  serviceDisplaySuffix,
   splitRouteRequest,
   toJavaEntity,
 } from './utils';
@@ -31,6 +36,19 @@ describe('buildCurl / buildFetchSnippet', () => {
     expect(buildCurl('http://x/api', 'DELETE')).toBe("curl -X DELETE 'http://x/api'");
     expect(buildFetchSnippet('http://x/api', 'POST')).toBe("fetch('http://x/api', {\n  method: 'POST',\n})");
     expect(buildFetchSnippet('http://x/api', 'PUT')).toBe("fetch('http://x/api', {\n  method: 'PUT',\n})");
+  });
+});
+
+describe('serviceDisplaySuffix 服务分组展示后缀', () => {
+  it('端口模式显示 :端口', () => {
+    expect(serviceDisplaySuffix({ port: 33233, isDefault: true }, 'port')).toBe(':33233');
+    expect(serviceDisplaySuffix({ port: 3001, isDefault: false }, 'port')).toBe(':3001');
+  });
+
+  it('路径模式显示 basePath 前缀，默认服务为 /', () => {
+    expect(serviceDisplaySuffix({ port: 0, isDefault: true }, 'path')).toBe('/');
+    expect(serviceDisplaySuffix({ port: 0, isDefault: false, basePath: 'order' }, 'path')).toBe('/order');
+    expect(serviceDisplaySuffix({ port: 0, isDefault: false }, 'path')).toBe('/');
   });
 });
 
@@ -257,5 +275,53 @@ describe('parseSequenceDraft / sequenceToDraftText 自定义响应头', () => {
     expect(parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: 'x' }])).ok).toBe(false);
     expect(parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: [{ key: '  ', value: 'x' }] }])).ok).toBe(false);
     expect(parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: [{ key: 'A' }] }])).ok).toBe(false);
+  });
+});
+
+describe('clampDrawerWidth / 抽屉宽度持久化', () => {
+  it('钳制到 [560, 视口×0.94]，四舍五入取整', () => {
+    expect(clampDrawerWidth(400, 1920)).toBe(560);
+    expect(clampDrawerWidth(1000, 1920)).toBe(1000);
+    expect(clampDrawerWidth(9999, 1920)).toBe(Math.floor(1920 * 0.94));
+    expect(clampDrawerWidth(600.4, 1920)).toBe(600);
+  });
+
+  it('视口极窄时上限不小于最小宽度', () => {
+    expect(clampDrawerWidth(800, 500)).toBe(560);
+    expect(clampDrawerWidth(300, 500)).toBe(560);
+  });
+
+  it('load/save/clear 读写 localStorage；无记录与非法值返回 null，超宽值按视口钳制', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      expect(loadDrawerWidth(1920)).toBeNull();
+      saveDrawerWidth(1000);
+      expect(loadDrawerWidth(1920)).toBe(1000);
+      saveDrawerWidth(99999);
+      expect(loadDrawerWidth(1920)).toBe(Math.floor(1920 * 0.94));
+      saveDrawerWidth(-5);
+      expect(loadDrawerWidth(1920)).toBeNull();
+      saveDrawerWidth(900);
+      clearDrawerWidth();
+      expect(loadDrawerWidth(1920)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('localStorage 不可用时 load 返回 null，save/clear 静默不抛错', () => {
+    vi.stubGlobal('localStorage', undefined);
+    try {
+      expect(loadDrawerWidth(1920)).toBeNull();
+      expect(() => saveDrawerWidth(800)).not.toThrow();
+      expect(() => clearDrawerWidth()).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

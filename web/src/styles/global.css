@@ -412,6 +412,8 @@ body {
 .service-form input { padding: 8px 10px; font-size: 12px; }
 .service-form input[type="text"] { flex: 1; min-width: 0; }
 .service-form input[type="number"] { width: 86px; flex: none; }
+/* basePath 是短 slug，无需与服务名平分整行 */
+.service-form input[name="basePath"] { width: 220px; flex: none; }
 
 .svc-add {
   flex: none;
@@ -1005,12 +1007,51 @@ body.sidebar-resizing iframe { pointer-events: none; }
   right: 0;
   bottom: 0;
   z-index: 41;
-  /* 随视口自适应：窄屏不低于 640px，宽屏最多 940px */
-  width: min(clamp(640px, 46vw, 940px), 92vw);
+  /* 随视口自适应：窄屏不低于 720px，宽屏最多 1280px；拖拽后的内联宽度由 max-width 兜底防溢出 */
+  width: min(clamp(720px, 60vw, 1280px), 94vw);
+  max-width: 94vw;
   background: var(--panel);
   border-left: 1px solid var(--line);
   box-shadow: -12px 0 32px rgba(28, 39, 51, 0.16);
   animation: drawer-in 0.25s ease both;
+}
+
+/* 抽屉左缘拖拽条：加宽命中区，悬停/拖拽时显示高亮线 */
+.drawer-rz {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 30;
+  touch-action: none;
+}
+
+.drawer-rz:hover,
+.drawer-rz.active {
+  background: linear-gradient(90deg, var(--accent-dim), transparent);
+}
+
+.drawer-rz:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 拖拽抽屉时禁用选中和 iframe 捕获鼠标 */
+body.drawer-resizing { user-select: none; cursor: col-resize; }
+body.drawer-resizing iframe { pointer-events: none; }
+
+/* 窄屏抽屉全屏，拖拽条无意义 */
+@media (max-width: 760px) {
+  .drawer-panel {
+    width: 100vw;
+    max-width: 100vw;
+  }
+
+  .drawer-rz {
+    display: none;
+  }
 }
 
 @keyframes fade-in {

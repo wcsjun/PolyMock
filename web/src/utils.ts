@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'vue';
-import type { ConditionRow, ConditionType, RequestCondition, ResponseHeader, RouteRequest } from './types';
+import type { ConditionRow, ConditionType, PolyMockMode, RequestCondition, ResponseHeader, RouteRequest } from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -11,6 +11,12 @@ export const METHOD_COLORS: Record<string, string> = {
 
 export function methodColor(method: string): string {
   return METHOD_COLORS[method] || '#5b6b7c';
+}
+
+/** 服务分组的展示后缀：端口模式显示 :端口；路径模式显示 basePath 前缀（默认服务占用根路径，显示 /） */
+export function serviceDisplaySuffix(svc: { port: number; isDefault: boolean; basePath?: string }, mode: PolyMockMode): string {
+  if (mode !== 'path') return `:${svc.port}`;
+  return svc.isDefault ? '/' : `/${svc.basePath ?? ''}`;
 }
 
 /** 对应原 app.js 的 formatBody()：字符串原样展示，其余格式化缩进 */
@@ -447,4 +453,49 @@ export function toJavaEntity(className: string, body: unknown): string {
   }
   const lines = ['import lombok.Data;', '', `@Data`, `public class ${cls.name} {`, ...renderClassBody(cls, 1), '}'];
   return `${lines.join('\n')}\n`;
+}
+
+/* ---------- 接口编辑抽屉宽度 ---------- */
+
+/** 抽屉宽度下限；上限为视口宽度 × DRAWER_VIEWPORT_RATIO（与 .drawer-panel 的 CSS max-width 兜底一致） */
+export const DRAWER_MIN_WIDTH = 560;
+export const DRAWER_VIEWPORT_RATIO = 0.94;
+
+const DRAWER_WIDTH_KEY = 'polymock:drawer-width';
+
+/** 钳制抽屉宽度到 [DRAWER_MIN_WIDTH, 视口×DRAWER_VIEWPORT_RATIO]，四舍五入取整 */
+export function clampDrawerWidth(width: number, viewportWidth: number): number {
+  const max = Math.max(DRAWER_MIN_WIDTH, Math.floor(viewportWidth * DRAWER_VIEWPORT_RATIO));
+  return Math.min(Math.max(Math.round(width), DRAWER_MIN_WIDTH), max);
+}
+
+/** 读取持久化的抽屉宽度；无记录 / 非法值 / 存储不可用时返回 null（用 CSS 默认宽度） */
+export function loadDrawerWidth(viewportWidth: number): number | null {
+  try {
+    const raw = localStorage.getItem(DRAWER_WIDTH_KEY);
+    if (raw === null) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return clampDrawerWidth(parsed, viewportWidth);
+  } catch {
+    return null;
+  }
+}
+
+/** 持久化抽屉宽度；存储不可用（隐私模式等）时静默忽略 */
+export function saveDrawerWidth(width: number): void {
+  try {
+    localStorage.setItem(DRAWER_WIDTH_KEY, String(width));
+  } catch {
+    /* 忽略存储失败 */
+  }
+}
+
+/** 清除持久化的抽屉宽度（恢复 CSS 默认宽度） */
+export function clearDrawerWidth(): void {
+  try {
+    localStorage.removeItem(DRAWER_WIDTH_KEY);
+  } catch {
+    /* 忽略存储失败 */
+  }
 }
