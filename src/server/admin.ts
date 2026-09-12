@@ -354,8 +354,12 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: '默认服务不可删除' });
       return;
     }
+    if (!registry.getService(serviceId)) {
+      res.status(404).json({ ok: false, error: '服务不存在' });
+      return;
+    }
     await manager.stop(serviceId);
-    res.json({ ok: registry.removeService(serviceId) });
+    res.json({ ok: true });
   });
 
   // ---- 服务 basePath（路径模式前缀）----
@@ -602,7 +606,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: '缺少 method 或 path 参数' });
       return;
     }
-    res.json({ ok: registry.remove(serviceId, method, routePath) });
+    if (!registry.remove(serviceId, method, routePath)) {
+      res.status(404).json({ ok: false, error: '接口不存在' });
+      return;
+    }
+    res.json({ ok: true });
   });
 
   router.put('/routes/:id', (req, res) => {
