@@ -1442,4 +1442,121 @@ describe('路径模式（POLYMOCK_MODE=path）', () => {
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toContain('basePath');
   });
+  it('自定义响应头：默认响应与变体命中分别携带各自的 headers', async () => {
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/with-headers', {
+      status: 200,
+      body: { ok: true },
+      headers: [
+        { key: 'X-Mock-Source', value: 'polymock' },
+        { key: 'X-Trace', value: 't-default' },
+      ],
+    }, '带头接口', undefined, false, [
+      {
+        id: 'v-admin',
+        name: 'admin',
+        match: { headers: [{ key: 'X-Role', value: 'admin' }] },
+        response: { status: 200, body: { role: 'admin' }, headers: [{ key: 'X-Trace', value: 't-admin' }] },
+      },
+    ]);
+
+    const def = await fetch(`${server.baseUrl}/api/with-headers`);
+    expect(def.headers.get('x-mock-source')).toBe('polymock');
+    expect(def.headers.get('x-trace')).toBe('t-default');
+
+    const admin = await fetch(`${server.baseUrl}/api/with-headers`, { headers: { 'X-Role': 'admin' } });
+    /* 变体整体替换响应：只带变体自己的 headers，默认响应的 headers 不再出现 */
+    expect(admin.headers.get('x-trace')).toBe('t-admin');
+    expect(admin.headers.get('x-mock-source')).toBeNull();
+  });
+
+  it('自定义响应头：同名多条按多值头返回（Set-Cookie）', async () => {
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/cookies', {
+      status: 200,
+      body: {},
+      headers: [
+        { key: 'Set-Cookie', value: 'a=1; Path=/' },
+        { key: 'Set-Cookie', value: 'b=2; Path=/' },
+      ],
+    });
+    const res = await fetch(`${server.baseUrl}/api/cookies`);
+    expect(res.headers.getSetCookie()).toEqual(['a=1; Path=/', 'b=2; Path=/']);
+  });
+
+  it('自定义响应头：值支持模板占位符（params 与 $id）', async () => {
+    registry.add(DEFAULT_SERVICE_ID, 'POST', '/api/users/:id', {
+      status: 201,
+      body: { id: '{{params.id}}' },
+      headers: [
+        { key: 'Location', value: '/api/users/{{params.id}}' },
+        { key: 'X-Req-Id', value: '{{$id}}' },
+      ],
+    });
+    const res = await fetch(`${server.baseUrl}/api/users/42`, { method: 'POST' });
+    expect(res.headers.get('location')).toBe('/api/users/42');
+    expect(res.headers.get('x-req-id')).toBe('1');
+  });
+
+  it('自定义响应头：Content-Type 覆盖 contentType 字段', async () => {
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/override-ct', {
+      status: 200,
+      contentType: 'application/json',
+      body: { ok: true },
+      headers: [{ key: 'Content-Type', value: 'application/vnd.api+json' }],
+    });
+    const res = await fetch(`${server.baseUrl}/api/override-ct`);
+    /* Express 会为已知 mime 类型补 charset，语义上以自定义头为准（不再是 application/json） */
+    expect(res.headers.get('content-type')).toBe('application/vnd.api+json; charset=utf-8');
+  });
+
+  it('自定义响应头：序列响应每步携带各自的 headers', async () => {
+    registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/seq-headers', { status: 200, body: {} }, undefined, undefined, undefined, undefined, {
+      sequence: [
+        { status: 200, body: { step: 1 }, headers: [{ key: 'X-Step', value: 'first' }] },
+        { status: 500, body: { step: 2 } },
+      ],
+    });
+    const first = await fetch(`${server.baseUrl}/api/seq-headers`);
+    expect(first.headers.get('x-step')).toBe('first');
+    const second = await fetch(`${server.baseUrl}/api/seq-headers`);
+    expect(second.headers.get('x-step')).toBeNull();
+  });
+
+  it('管理 API：注册时校验响应头——受管头与非法值返回 400，合法值入库', async () => {
+    const post = (response: unknown) =>
+      fetch(`${server.baseUrl}/__polymock/routes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'hdr', method: 'GET', path: '/api/hdr', response }),
+      });
+
+    const forbidden = await post({ status: 200, body: {}, headers: [{ key: 'Content-Length', value: '12' }] });
+    expect(forbidden.status).toBe(400);
+    expect(((await forbidden.json()) as { error: string }).error).toContain('托管');
+
+    const crlfValue = ['a', 'b: 1'].join(String.fromCharCode(13, 10));
+    const crlf = await post({ status: 200, body: {}, headers: [{ key: 'X-Bad', value: crlfValue }] });
+    expect(crlf.status).toBe(400);
+
+    const badKey = await post({ status: 200, body: {}, headers: [{ key: 'Bad Header', value: 'x' }] });
+    expect(badKey.status).toBe(400);
+
+    const ok = await post({
+      status: 200,
+      body: {},
+      headers: [
+        { key: '  X-Good  ', value: 'yes' },
+        { key: 'x-good', value: 'dup' },
+      ],
+    });
+    expect(ok.status).toBe(201);
+    const route = ((await ok.json()) as { route: { response: { headers?: Array<{ key: string; value: string }> } } }).route;
+    expect(route.response.headers).toEqual([
+      { key: 'X-Good', value: 'yes' },
+      { key: 'x-good', value: 'dup' },
+    ]);
+
+    /* Mock 分发验证入库后实际生效：同名两条按多值头输出 */
+    const mock = await fetch(`${server.baseUrl}/api/hdr`);
+    expect(mock.headers.get('x-good')).toBe('yes, dup');
+  });
 });

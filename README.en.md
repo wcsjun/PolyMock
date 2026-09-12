@@ -113,6 +113,7 @@ Differences in path mode:
 - **Sequence responses**: cycle through a list of responses in hit order (e.g. "ok → ok → error"), taking precedence over the scene set, variants, and the default response
 - **Global scene set**: once `activeVariant` is set, every route that has a variant with that name is forced onto it (its `match` conditions are bypassed) — one click switches the whole server
 - **Dynamic response templates**: inside string values of the response body, use `{{query.x}}`, `{{header.x}}`, `{{body.x}}` (dot path), `{{params.x}}` (path parameters), `{{$id}}` (per-route auto increment), `{{$now}}` (ISO timestamp), `{{$int(a,b)}}` (random integer, inclusive), plus built-in fake data: `{{$name}}` `{{$ename}}` `{{$email}}` `{{$phone}}` `{{$city}}` `{{$word}}` `{{$bool}}`. Unresolvable placeholders are left as-is
+- **Custom response headers**: the default response, every variant, and each sequence step can attach custom headers; values support template placeholders (e.g. `Location: /api/users/{{params.id}}`, `X-Request-Id: {{$id}}`); repeated names are sent as multi-value headers (e.g. multiple Set-Cookie); applied after the `contentType` field — a same-named Content-Type header overrides it; managed headers such as `content-length` / `transfer-encoding` are rejected at registration (400)
 - **Delay / jitter / fault injection**: `delayMs` (0-60000 fixed delay) + `jitterMs` (random jitter cap), and `failureRate` (0-100%) to return 500 with some probability
 - **Formatting and instant validation**: one-click body formatting, on-blur JSON validation with inline error highlight, and a second server-side validation on submit
 
@@ -228,10 +229,10 @@ Key fields:
 | `version` | Schema version, currently `2` |
 | `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; in path mode non-default services are hosted by their `basePath` prefix instead (`port` unused, set to `0`); **the `default` service's `port` is the main port — edit it and restart to take effect** |
 | `routes[].method` / `path` | HTTP method and path; paths support `:param` segments |
-| `routes[].response` | Default response: `status` / `contentType?` / `body` |
+| `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body` |
 | `routes[].request` / `requireMatch` | Expected request conditions and the admission gate |
 | `routes[].variants[]` | Response variants: `name` / `match?` (omitted = always matches) / `response` |
-| `routes[].sequence[]` | Sequence responses: `{ status, body }` entries, returned cyclically |
+| `routes[].sequence[]` | Sequence responses: `{ status, body, headers? }` entries, returned cyclically |
 | `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` | Behavior switches and simulation parameters |
 | `settings.activeVariant` | Global scene set: when set, same-named variants are forced |
 

@@ -251,6 +251,33 @@ describe('isTemplateJsonValid', () => {
   });
 });
 
+describe('parseSequenceDraft / sequenceToDraftText 自定义响应头', () => {
+  it('序列步骤可带 headers，提交与回填往返一致', () => {
+    const draft = [
+      { status: 200, body: { step: 1 }, headers: [{ key: ' X-Step ', value: 'first' }] },
+      { status: 500, body: { step: 2 } },
+    ];
+    const parsed = parseSequenceDraft(JSON.stringify(draft));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value[0].headers).toEqual([{ key: 'X-Step', value: 'first' }]);
+    expect(parsed.value[1].headers).toBeUndefined();
+    expect(sequenceToDraftText(parsed.value)).toBe(
+      JSON.stringify([{ status: 200, body: { step: 1 }, headers: [{ key: 'X-Step', value: 'first' }] }, { status: 500, body: { step: 2 } }], null, 2),
+    );
+  });
+
+  it('headers 空数组省略、非数组与缺 key 报错', () => {
+    const empty = parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: [] }]));
+    expect(empty.ok).toBe(true);
+    if (empty.ok) expect(empty.value[0].headers).toBeUndefined();
+
+    expect(parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: 'x' }])).ok).toBe(false);
+    expect(parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: [{ key: '  ', value: 'x' }] }])).ok).toBe(false);
+    expect(parseSequenceDraft(JSON.stringify([{ status: 200, body: {}, headers: [{ key: 'A' }] }])).ok).toBe(false);
+  });
+});
+
 describe('clampDrawerWidth / 抽屉宽度持久化', () => {
   it('钳制到 [560, 视口×0.94]，四舍五入取整', () => {
     expect(clampDrawerWidth(400, 1920)).toBe(560);
