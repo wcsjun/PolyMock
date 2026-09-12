@@ -2,7 +2,7 @@
 
 [English](./README.en.md) | 简体中文
 
-> 本地 HTTP Mock 服务器：多服务分组（独立端口）、运行时注册接口、请求条件匹配、响应场景切换——为前端本地开发与联调而设计。
+> 本地 HTTP Mock 服务器：多服务分组（独立端口或路径前缀）、运行时注册接口、请求条件匹配、响应场景切换——为前端本地开发与联调而设计。
 
 ## 项目简介
 
@@ -62,11 +62,38 @@ curl http://localhost:33233/api/orders                                    # {"ro
 curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"role":"admin"}
 ```
 
+### Docker
+
+镜像默认启用路径模式（`POLYMOCK_MODE=path`）：所有服务经主端口 `/{basePath}` 前缀分发，只需暴露一个端口，配置持久化到 `/data` 卷（重启不丢）。
+
+```bash
+docker build -t polymock .
+docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
+```
+
+启动后打开 <http://localhost:33233>，新增服务分组时无需指定端口，接口按 `http://localhost:33233/{basePath}{接口路径}` 访问（详见下文「运行模式」）。
+
+## 运行模式
+
+环境变量 `POLYMOCK_MODE` 决定服务分组的承载方式，缺省 `port`：
+
+| 模式 | 说明 |
+| --- | --- |
+| `port`（默认） | 各服务分组在独立端口监听，默认服务占用主端口 |
+| `path` | 所有服务经主端口 `/{basePath}` 前缀分发；只需暴露主端口，适合容器部署 |
+
+路径模式的差异：
+
+- 服务分组创建时免端口，按 `basePath` 前缀区分；不指定时由服务名自动生成（小写字母/数字/连字符，重名自动追加 `-2`、`-3`……），Web 控制台服务面板中可随时修改
+- 接口实际访问地址为 `http://<主地址>/{basePath}{接口路径}`——如 basePath 为 `order` 的服务注册了 `GET /api/orders`，则访问 `/order/api/orders`；默认服务仍占用主端口根路径，不加前缀
+- `basePath` 不可使用保留前缀（`__polymock`、`assets`），也不能与其他服务的 basePath 或默认服务接口路径的首段重合，冲突在创建/修改时返回 409
+- 旧配置文件里缺失 `basePath` 的服务在启动时自动补齐；当前模式可通过 `GET /__polymock/meta` 查询，Web 控制台也会随之切换表单与地址拼接
+
 ## 功能清单
 
 ### 接口管理
 
-- **多服务分组独立端口**：除主端口上的默认服务外，可创建多个服务分组，各自独立端口监听、互不干扰
+- **多服务分组**：除主端口上的默认服务外，可创建多个服务分组——端口模式下各自独立端口监听，路径模式下经主端口 `/{basePath}` 前缀分发（见「运行模式」）
 - **Web 控制台**：抽屉式表单新增/编辑接口，条件用 Postman 风格表格编辑（Body 支持表格 ⇄ JSON 双向互转）
 - **接口启用/禁用**：禁用后视为未注册（配置了代理时穿透到真实后端）
 - **删除确认**：删除服务或接口均弹出确认提示，防止误删
@@ -127,7 +154,7 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 
 | 视图 | 说明 |
 | --- | --- |
-| **接口管理** | 服务分组列表（新建/删除/端口/运行状态）与接口卡片（方法色标、条件摘要、变体列表）；抽屉式表单编辑接口的条件、变体、序列响应、延迟/抖动/故障注入、CRUD 开关；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
+| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态）与接口卡片（方法色标、条件摘要、变体列表）；抽屉式表单编辑接口的条件、变体、序列响应、延迟/抖动/故障注入、CRUD 开关；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
 | **嵌入测试** | 输入任意页面地址，将其嵌入可拖拽调整宽高的 iframe 容器中（右/下/右下边缘拖拽、一键铺满、新标签页打开），便于在控制台内直接验证页面与 Mock 的联调效果 |
 | **请求日志** | 日志列表与过滤（状态/服务/路径关键字），实时（SSE）/轮询模式徽标，支持重放、复制 curl、清空、把代理条目保存为接口 |
 
@@ -137,9 +164,11 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/__polymock/services` | 服务分组列表（含 `isDefault` / `running` / 接口数量） |
-| POST | `/__polymock/services` | 新建服务分组，body `{ name, port }` |
+| GET | `/__polymock/meta` | 运行模式元信息：`{ mode, mainPort }` |
+| GET | `/__polymock/services` | 服务分组列表（含 `isDefault` / `running` / `basePath` / 接口数量） |
+| POST | `/__polymock/services` | 新建服务分组；端口模式 body `{ name, port }`，路径模式 body `{ name, basePath? }`（省略时自动生成） |
 | DELETE | `/__polymock/services/:id` | 删除服务分组（默认服务不可删除） |
+| PUT | `/__polymock/services/:id/basePath` | 修改服务 basePath 前缀（路径模式），body `{ basePath }` |
 | PUT | `/__polymock/services/:id/proxy` | 设置代理穿透目标，body `{ target }`（`null` 或空串清除） |
 | GET | `/__polymock/routes` | 接口列表，可选 `?serviceId=` 过滤 |
 | POST | `/__polymock/routes` | 注册接口（必填 `name` / `method` / `path`，path 以 `/` 开头） |
@@ -197,7 +226,7 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 | 字段 | 说明 |
 | --- | --- |
 | `version` | schema 版本，当前为 `2` |
-| `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；**`default` 服务的 `port` 即主端口，改后重启生效** |
+| `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；路径模式下非默认服务改由 `basePath` 前缀承载（`port` 不使用，置 `0`）；**`default` 服务的 `port` 即主端口，改后重启生效** |
 | `routes[].method` / `path` | HTTP 方法与路径，path 支持 `:param` 参数段 |
 | `routes[].response` | 默认响应：`status` / `contentType?` / `body` |
 | `routes[].request` / `requireMatch` | 预期请求条件与准入开关 |
@@ -212,6 +241,7 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `POLYMOCK_MODE` | `port` | 运行模式：`port` = 各服务独立端口监听；`path` = 所有服务经主端口 `/{basePath}` 前缀分发（Docker 镜像默认 `path`），详见「运行模式」 |
 | `POLYMOCK_PORT` | 配置文件 `default` 服务 `port`（出厂 `33233`） | 主端口（默认服务与 Web UI / 管理 API 所在）；优先级高于配置文件，显式设置后会回写同步到配置 |
 | `POLYMOCK_HOST` | 未设置（监听全部网卡） | 监听地址；设置为非回环地址且未配置管理令牌时启动会输出安全警告 |
 | `POLYMOCK_CONFIG_FILE` | `polymock.config.json` | 配置文件路径 |

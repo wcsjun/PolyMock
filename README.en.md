@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.md)
 
-> A local HTTP mock server: group services on independent ports, register routes at runtime, match requests by conditions, and switch response scenarios on the fly — built for frontend local development and integration testing.
+> A local HTTP mock server: group services on independent ports or path prefixes, register routes at runtime, match requests by conditions, and switch response scenarios on the fly — built for frontend local development and integration testing.
 
 ## Introduction
 
@@ -62,11 +62,38 @@ curl http://localhost:33233/api/orders                                    # {"ro
 curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"role":"admin"}
 ```
 
+### Docker
+
+The image ships with path mode enabled (`POLYMOCK_MODE=path`): every service is dispatched from the main port under a `/{basePath}` prefix, so a single port needs exposing. Configuration persists to the `/data` volume and survives restarts.
+
+```bash
+docker build -t polymock .
+docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
+```
+
+Open <http://localhost:33233> afterwards. Creating a service group requires no port; routes are served at `http://localhost:33233/{basePath}{routePath}` (see "Run modes" below).
+
+## Run modes
+
+The `POLYMOCK_MODE` environment variable decides how service groups are hosted; the default is `port`:
+
+| Mode | Description |
+| --- | --- |
+| `port` (default) | Each service group listens on its own port; the default service occupies the main port |
+| `path` | Every service is dispatched from the main port under a `/{basePath}` prefix; only the main port needs exposing — ideal for containers |
+
+Differences in path mode:
+
+- Service groups are created without ports and distinguished by their `basePath` prefix; when omitted it is derived from the service name (lowercase letters/digits/hyphens, with `-2`, `-3`… appended on collision) and can be edited any time in the console's service panel
+- A route's real URL is `http://<host>/{basePath}{routePath}` — e.g. a `GET /api/orders` route in a service whose basePath is `order` is served at `/order/api/orders`; the default service stays at the main port root with no prefix
+- A `basePath` cannot use the reserved prefixes (`__polymock`, `assets`) and must not clash with another service's basePath or the first segment of any default-service route — conflicts are rejected with 409
+- Services in older config files missing a `basePath` are migrated automatically on startup; the current mode is available via `GET /__polymock/meta`, and the web console adapts its forms and URL building accordingly
+
 ## Features
 
 ### Route management
 
-- **Service groups on independent ports**: besides the default service on the main port, create any number of service groups, each listening on its own port
+- **Service groups**: besides the default service on the main port, create any number of service groups — each listens on its own port in port mode, or is dispatched from the main port under a `/{basePath}` prefix in path mode (see "Run modes")
 - **Web console**: drawer-style form for creating/editing routes; conditions are edited in Postman-style tables (the Body tab converts between table rows and JSON in both directions)
 - **Enable/disable routes**: a disabled route is treated as unregistered (and falls through to the proxy when configured)
 - **Delete confirmation**: deleting a service or a route always asks for confirmation
@@ -127,7 +154,7 @@ Open <http://localhost:33233> in a browser and switch between three views in the
 
 | View | Description |
 | --- | --- |
-| **Routes** | Service groups (create/delete, port, running status) and route cards (method color, condition summary, variant list); a drawer form edits conditions, variants, sequence responses, delay/jitter/fault injection, and the CRUD switch; the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
+| **Routes** | Service groups (create/delete, port, basePath, running status) and route cards (method color, condition summary, variant list); a drawer form edits conditions, variants, sequence responses, delay/jitter/fault injection, and the CRUD switch; the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
 | **Embed test** | Load any page URL into a resizable iframe container (drag the right/bottom/bottom-right edges, fill the stage, open in a new tab) to verify your page against the mocks without leaving the console |
 | **Request log** | Log list with filters (status/service/path keyword), a live (SSE) / polling badge, and actions to replay, copy curl, clear, or save a proxied entry as a route |
 
@@ -137,9 +164,11 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/__polymock/services` | List service groups (with `isDefault` / `running` / route count) |
-| POST | `/__polymock/services` | Create a service group, body `{ name, port }` |
+| GET | `/__polymock/meta` | Run-mode metadata: `{ mode, mainPort }` |
+| GET | `/__polymock/services` | List service groups (with `isDefault` / `running` / `basePath` / route count) |
+| POST | `/__polymock/services` | Create a service group; port mode body `{ name, port }`, path mode body `{ name, basePath? }` (auto-generated when omitted) |
 | DELETE | `/__polymock/services/:id` | Delete a service group (the default service cannot be deleted) |
+| PUT | `/__polymock/services/:id/basePath` | Update a service's basePath prefix (path mode), body `{ basePath }` |
 | PUT | `/__polymock/services/:id/proxy` | Set the proxy target, body `{ target }` (`null` or empty string clears it) |
 | GET | `/__polymock/routes` | List routes; optional `?serviceId=` filter |
 | POST | `/__polymock/routes` | Register a route (requires `name` / `method` / `path`; path must start with `/`) |
@@ -197,7 +226,7 @@ Key fields:
 | Field | Description |
 | --- | --- |
 | `version` | Schema version, currently `2` |
-| `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; **the `default` service's `port` is the main port — edit it and restart to take effect** |
+| `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; in path mode non-default services are hosted by their `basePath` prefix instead (`port` unused, set to `0`); **the `default` service's `port` is the main port — edit it and restart to take effect** |
 | `routes[].method` / `path` | HTTP method and path; paths support `:param` segments |
 | `routes[].response` | Default response: `status` / `contentType?` / `body` |
 | `routes[].request` / `requireMatch` | Expected request conditions and the admission gate |
@@ -212,6 +241,7 @@ Older configuration files (missing `version` or `version: 1`) are migrated autom
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `POLYMOCK_MODE` | `port` | Run mode: `port` = independent ports per service; `path` = all services dispatched from the main port under `/{basePath}` prefixes (the Docker image defaults to `path`); see "Run modes" |
 | `POLYMOCK_PORT` | `default` service `port` in the config file (`33233` out of the box) | Main port (home of the default service, web UI, and admin API); takes precedence over the config file and is written back to it when set explicitly |
 | `POLYMOCK_HOST` | unset (listens on all interfaces) | Listen address; a startup warning is printed when bound to a non-loopback address without an admin token |
 | `POLYMOCK_CONFIG_FILE` | `polymock.config.json` | Configuration file path |
