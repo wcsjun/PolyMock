@@ -2,11 +2,14 @@
 import { ref, watch } from 'vue';
 import { createRoute } from '../api';
 import { parseOpenApi } from '../openapi';
-import type { NotifyFn, ServiceInfo } from '../types';
+import { serviceDisplaySuffix } from '../utils';
+import type { NotifyFn, PolyMockMode, ServiceInfo } from '../types';
 
 const props = defineProps<{
   notify: NotifyFn;
   services: ServiceInfo[];
+  /** 运行模式：决定服务分组下拉的后缀展示（端口模式 :端口 / 路径模式 basePath 前缀） */
+  mode: PolyMockMode;
 }>();
 
 const emit = defineEmits<{
@@ -112,7 +115,7 @@ async function startImport() {
           <div class="field">
             <label for="import-service">导入到服务</label>
             <select id="import-service" v-model="serviceId" class="import-service">
-              <option v-for="svc in services" :key="svc.id" :value="svc.id">{{ svc.name }}（:{{ svc.port }}）</option>
+              <option v-for="svc in services" :key="svc.id" :value="svc.id">{{ svc.name }}（{{ serviceDisplaySuffix(svc, props.mode) }}）</option>
             </select>
             <p class="hint">解析在浏览器本地完成，仅支持 OpenAPI 3 的 JSON 文档；路径参数已自动转换为 :param 形式。</p>
           </div>

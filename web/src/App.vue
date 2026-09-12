@@ -401,6 +401,7 @@ function onSidebarRzDown(event: PointerEvent) {
       <RouteForm
         :services="services"
         :editing="editingRoute"
+        :mode="mode"
         :notify="showToast"
         @changed="onFormChanged"
         @cancel-edit="closeDrawer"
@@ -413,6 +414,7 @@ function onSidebarRzDown(event: PointerEvent) {
     v-show="importOpen"
     :notify="showToast"
     :services="services"
+    :mode="mode"
     @close="importOpen = false"
     @imported="loadAll"
   />
