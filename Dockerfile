@@ -4,11 +4,9 @@
 #
 # 体积优化要点（382MB -> ~127MB）：
 #   1) 构建阶段用官方 node 镜像（含 pnpm/corepack/tsc/vite），产物为纯 JS；
-#   2) 单独一层只装生产依赖，不把 vite/typescript/playwright 等开发依赖打进镜像；
-#   3) 剔除运行期用不到的 vue 相关包——前端已由 vite 打包进 public/，
-#      运行时只需 express 依赖树（vue 目前仍声明在 dependencies 中，
-#      待其移到 devDependencies 后可删掉本段 rm）；
-#   4) 运行阶段基于裸 alpine + 系统 nodejs（无 npm/corepack/toolchain），
+#   2) 单独一层只装生产依赖（--prod 自动排除 vue/vite/typescript/playwright 等
+#      开发依赖——前端已由 vite 打包进 public/，运行时只需 express 依赖树）；
+#   3) 运行阶段基于裸 alpine + 系统 nodejs（无 npm/corepack/toolchain），
 #      产物为纯 JS 且无原生模块，跨 node 版本运行安全。
 
 FROM node:22-alpine AS build
@@ -24,10 +22,7 @@ FROM node:22-alpine AS prods
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --prod \
-    && rm -rf node_modules/vue node_modules/@vue \
-       node_modules/.pnpm/vue@* node_modules/.pnpm/@vue+* \
-       node_modules/.pnpm/@babel+parser@* node_modules/.pnpm/typescript@*
+RUN pnpm install --frozen-lockfile --prod
 
 FROM alpine:3.24
 RUN apk add --no-cache nodejs
