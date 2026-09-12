@@ -412,6 +412,8 @@ body {
 .service-form input { padding: 8px 10px; font-size: 12px; }
 .service-form input[type="text"] { flex: 1; min-width: 0; }
 .service-form input[type="number"] { width: 86px; flex: none; }
+/* basePath 是短 slug，无需与服务名平分整行 */
+.service-form input[name="basePath"] { width: 220px; flex: none; }
 
 .svc-add {
   flex: none;
