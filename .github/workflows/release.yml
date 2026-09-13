@@ -1,0 +1,156 @@
+name: Release
+
+# 推送 v* tag 触发：质量门禁 → npm 发布 → Docker 多架构镜像（GHCR + Docker Hub）→ GitHub Release。
+# 发版方式：更新 package.json version 与 CHANGELOG.md 后，git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # 创建 GitHub Release
+  packages: write # 推送 GHCR 镜像
+  id-token: write # npm provenance（npm 页面展示构建来源证明）
+
+jobs:
+  test:
+    name: 质量门禁
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 版本不写死，读取 package.json 的 packageManager 字段
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # tag 与 package.json 版本必须一致，防止发错版本（E2E 由 main 分支的 CI 每次 push 把关，此处从快）
+      - name: Verify tag matches package.json version
+        run: node -e "const v=require('./package.json').version, t=process.env.GITHUB_REF_NAME.slice(1); if(v!==t){console.error('tag v'+t+' 与 package.json 版本 '+v+' 不一致');process.exit(1)}else{console.log('version '+v+' OK')}"
+
+      - name: Typecheck (app + tests)
+        run: pnpm typecheck
+
+      - name: Typecheck (web)
+        run: pnpm typecheck:web
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  publish-npm:
+    name: 发布 npm
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # prepublishOnly 钩子自动执行 pnpm build（dist + public）
+      - name: Publish
+        run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
+
+  docker:
+    name: 构建 Docker 镜像
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 镜像名必须全小写（github.repository 原样是 wcsjun/PolyMock）
+      - name: Compute lowercase image names
+        run: |
+          echo "IMAGE_GHCR=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "IMAGE_HUB=docker.io/${DOCKERHUB_USERNAME,,}/polymock" >> "$GITHUB_ENV"
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.IMAGE_GHCR }}
+            ${{ env.IMAGE_HUB }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  github-release:
+    name: 创建 GitHub Release
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 从 CHANGELOG.md 提取当前版本段落作为 Release 说明；未命中时回退为简短说明。
+      # 用 indexOf 定位而非正则：避免正则反斜杠在 YAML/bash/JS 多层转义中的歧义
+      - name: Extract changelog for this version
+        run: node -e 'const fs=require("fs");const version=process.env.GITHUB_REF_NAME.slice(1);const md=fs.readFileSync("CHANGELOG.md","utf8");const start=md.indexOf("## ["+version+"]");let body="PolyMock v"+version;if(start!==-1){const from=md.indexOf("\n",start)+1;let end=md.indexOf("\n## [",from);if(end===-1)end=md.length;body=md.slice(from,end).trim();}fs.writeFileSync("release-body.md",body);'
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-body.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

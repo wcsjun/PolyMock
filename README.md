@@ -18,6 +18,21 @@
 
 ## 快速开始
 
+通过 npm 安装（包内自带 Web UI 构建产物，本机无需构建）：
+
+```bash
+npm i -g @wcsjun/polymock   # 全局安装后运行：
+polymock                    # 启动后访问 http://localhost:33233
+```
+
+或免安装临时运行：
+
+```bash
+npx @wcsjun/polymock
+```
+
+也可以从源码运行（开发场景）：
+
 ```bash
 pnpm install
 pnpm build        # tsc 编译后端到 dist/ + vite 构建前端到 public/
@@ -67,8 +82,12 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 镜像默认启用路径模式（`POLYMOCK_MODE=path`）：所有服务经主端口 `/{basePath}` 前缀分发，只需暴露一个端口，配置持久化到 `/data` 卷（重启不丢）。
 
 ```bash
-docker build -t polymock .
-docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
+# 预构建镜像（每次发版由流水线自动构建，amd64/arm64 双架构）：
+docker run -d --name polymock -p 33233:33233 -v polymock-data:/data ghcr.io/wcsjun/polymock
+# 或 Docker Hub：docker run -d --name polymock -p 33233:33233 -v polymock-data:/data wcsjun/polymock
+
+# 本地构建：
+docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 ```
 
 启动后打开 <http://localhost:33233>，新增服务分组时无需指定端口，接口按 `http://localhost:33233/{basePath}{接口路径}` 访问（详见下文「运行模式」）。
@@ -279,8 +298,14 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 
 ## CI
 
-仓库使用 GitHub Actions（`.github/workflows/ci.yml`）：在 push（`main` 与 `feat/**` 分支）和所有 Pull Request 上依次执行 `pnpm typecheck`、`pnpm typecheck:web`、`pnpm test`、`pnpm build`。Node 22，pnpm 版本读取 `package.json` 的 `packageManager` 字段，安装使用 `--frozen-lockfile`。
+仓库使用 GitHub Actions（`.github/workflows/ci.yml`）：在 push（`main` 与 `feat/**` 分支）和所有 Pull Request 上执行两个 job——`CI`（`pnpm typecheck`、`pnpm typecheck:web`、`pnpm test`、`pnpm build`）与 `E2E`（安装 Playwright Chromium 后构建并运行 `pnpm test:e2e`）。Node 22，pnpm 版本读取 `package.json` 的 `packageManager` 字段，安装使用 `--frozen-lockfile`。
+
+发布走独立流水线（`.github/workflows/release.yml`）：推送 `v*` tag 后自动执行「tag 与 package.json 版本校验 → typecheck/test/build 门禁 → npm 发布（`@wcsjun/polymock`，含 provenance）→ Docker 多架构镜像推送（GHCR + Docker Hub，含 `latest` 与主次版本 tag）→ 创建 GitHub Release（说明提取自 `CHANGELOG.md`）」。发版前需在仓库 Secrets 配置 `NPM_TOKEN`（npm automation token）、`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。
+
+## Roadmap（规划）
+
+- **WebSocket 接口 Mock**（规划中，尚未实现）：在现有 HTTP 能力之外，提供 WS 接口的模拟与录制回放
 
 ## License
 
-MIT（见 `package.json` 的 `license` 字段）
+MIT（见 [LICENSE](LICENSE)）

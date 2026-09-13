@@ -18,6 +18,21 @@ Tech stack: Node.js 18+ / TypeScript / Express 5 (backend), Vue 3 + Vite (web co
 
 ## Quick Start
 
+Install from npm (the package ships the web UI inside, no build step needed on your machine):
+
+```bash
+npm i -g @wcsjun/polymock   # global install, then run:
+polymock                    # then open http://localhost:33233
+```
+
+Or run it once without installing:
+
+```bash
+npx @wcsjun/polymock
+```
+
+Alternatively, run from source (useful for development):
+
 ```bash
 pnpm install
 pnpm build        # tsc compiles the backend to dist/ + vite builds the frontend to public/
@@ -67,8 +82,12 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 The image ships with path mode enabled (`POLYMOCK_MODE=path`): every service is dispatched from the main port under a `/{basePath}` prefix, so a single port needs exposing. Configuration persists to the `/data` volume and survives restarts.
 
 ```bash
-docker build -t polymock .
-docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
+# Prebuilt images (built automatically by the release pipeline on every release, amd64/arm64):
+docker run -d --name polymock -p 33233:33233 -v polymock-data:/data ghcr.io/wcsjun/polymock
+# Or Docker Hub: docker run -d --name polymock -p 33233:33233 -v polymock-data:/data wcsjun/polymock
+
+# Local build:
+docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 ```
 
 Open <http://localhost:33233> afterwards. Creating a service group requires no port; routes are served at `http://localhost:33233/{basePath}{routePath}` (see "Run modes" below).
@@ -279,8 +298,14 @@ Test coverage by area:
 
 ## CI
 
-The repository uses GitHub Actions (`.github/workflows/ci.yml`): on every push (to `main` and `feat/**` branches) and on all pull requests it runs `pnpm typecheck`, `pnpm typecheck:web`, `pnpm test`, and `pnpm build`. It uses Node 22, reads the pnpm version from the `packageManager` field in `package.json`, and installs with `--frozen-lockfile`.
+The repository uses GitHub Actions (`.github/workflows/ci.yml`): on every push (to `main` and `feat/**` branches) and on all pull requests it runs two jobs — `CI` (`pnpm typecheck`, `pnpm typecheck:web`, `pnpm test`, `pnpm build`) and `E2E` (installs the Playwright Chromium browser, builds, and runs `pnpm test:e2e`). It uses Node 22, reads the pnpm version from the `packageManager` field in `package.json`, and installs with `--frozen-lockfile`.
+
+Releases run on a dedicated pipeline (`.github/workflows/release.yml`): pushing a `v*` tag automatically runs "tag/version consistency check → typecheck/test/build gate → npm publish (`@wcsjun/polymock`, with provenance) → multi-arch Docker image push (GHCR + Docker Hub, with `latest` and major.minor tags) → GitHub Release creation (notes extracted from `CHANGELOG.md`)". Before releasing, configure the repository secrets `NPM_TOKEN` (an npm automation token), `DOCKERHUB_USERNAME`, and `DOCKERHUB_TOKEN`.
+
+## Roadmap
+
+- **WebSocket mocking** (planned, not yet implemented): simulation and record/replay for WS endpoints on top of the existing HTTP capabilities
 
 ## License
 
-MIT (see the `license` field in `package.json`)
+MIT (see [LICENSE](LICENSE))
