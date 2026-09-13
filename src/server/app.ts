@@ -2,11 +2,11 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAdminRouter, isHostAllowed } from './admin.js';
+import { createAdminRouter, effectiveResponseContentType, isHostAllowed, isJsonContentType } from './admin.js';
 import type { RequestLogStore } from './request-log.js';
 import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
-import { renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
+import { renderString, renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
 import { DEFAULT_SERVICE_ID, type PolyMockMode } from '../types.js';
 import type { RequestCondition, RouteRequest, RouteResponse, ResponseHeader, Route, RouteAuth } from '../types.js';
 
@@ -23,6 +23,10 @@ export interface MainAppOptions {
   proxyAllowHosts?: string[];
   /** 运行模式：path 时按服务 basePath 前缀经主端口分发；缺省 port（各服务独立端口） */
   mode?: PolyMockMode;
+  /** 有状态 CRUD 共享存储（key = serviceId + 集合路径）：注入后与 ServiceManager 共用同一份，管理端 /crud 端点借此查看；缺省自建 */
+  crudStores?: Map<string, Map<string, Record<string, unknown>>>;
+  /** CRUD 自动生成 id 的自增计数（key 同 crudStores）；缺省自建 */
+  crudCounters?: Map<string, number>;
 }
 
 /** Mock 分发的可选依赖：请求日志与 {{$id}} 自增计数器 */
@@ -33,9 +37,9 @@ export interface DispatchDeps {
   idCounters?: Map<string, number>;
   /** 序列响应命中计数（key = routeId）；缺省时各 dispatch 自建 */
   seqCounters?: Map<string, number>;
-  /** 有状态 CRUD 资源集合（key = routeId，内层 key = 资源 id）；缺省时各 dispatch 自建 */
+  /** 有状态 CRUD 资源集合（key = serviceId + 集合路径，内层 key = 资源 id）；缺省时各 dispatch 自建 */
   crudStores?: Map<string, Map<string, Record<string, unknown>>>;
-  /** CRUD 自动生成 id 的自增计数（key = routeId）；缺省时各 dispatch 自建 */
+  /** CRUD 自动生成 id 的自增计数（key 同 crudStores）；缺省时各 dispatch 自建 */
   crudCounters?: Map<string, number>;
   /** 代理目标白名单（host 列表）：设置后转发前再次校验，不在白名单返回 502；缺省不校验 */
   proxyAllowHosts?: string[];
@@ -240,17 +244,20 @@ export function resolveRouteResponse(
  * 有状态 CRUD 处理（route.crud = true 时替代普通响应选择）：
  * - 集合路由（无参数段）：GET 返回全部、POST 创建（无 id 时自动生成 rec-N）；
  * - 条目路由（含参数段，取第一个参数为资源 id）：GET/PUT/PATCH/DELETE 按 id 存取，PUT/PATCH 浅合并。
+ * 存储键 = serviceId + 去掉参数段后的路径：同服务同集合的集合/条目路由共享资源存储，跨服务相互隔离
+ * （路径模式下所有服务共用主端口的存储 Map，键加 serviceId 前缀后同样按服务隔离）。
  * 返回待响应的状态码与响应体。
  */
 function crudOutcome(
+  serviceId: string,
   route: Route,
   params: Record<string, string>,
   req: express.Request,
   stores: Map<string, Map<string, Record<string, unknown>>>,
   counters: Map<string, number>,
 ): { status: number; body: unknown } {
-  /* 集合键 = 去掉参数段后的路径：同一集合的 GET/POST/PUT/DELETE 路由共享资源存储 */
-  const collectionKey = route.path.split('/').filter((segment) => segment && !segment.startsWith(':')).join('/');
+  /* 集合键 = serviceId + 去掉参数段后的路径：同一集合的 GET/POST/PUT/DELETE 路由共享资源存储 */
+  const collectionKey = `${serviceId}\u0000${route.path.split('/').filter((segment) => segment && !segment.startsWith(':')).join('/')}`;
   let resources = stores.get(collectionKey);
   if (!resources) {
     resources = new Map();
@@ -362,6 +369,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     let proxied = false;
     let proxyStatus: number | undefined;
     let proxyBody: string | undefined;
+    let proxyContentType: string | undefined;
 
     /** 写入一条请求日志（未注入 logs 时忽略）；query / bodyPreview 仅在非空时记录 */
     const writeLog = () => {
@@ -382,6 +390,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         ...(req.body !== undefined ? { bodyPreview: JSON.stringify(req.body).slice(0, 500) } : {}),
         ...(proxyStatus !== undefined ? { proxyStatus } : {}),
         ...(proxyBody !== undefined ? { proxyBody } : {}),
+        ...(proxyContentType ? { proxyContentType } : {}),
       });
     };
 
@@ -427,6 +436,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         proxied = true;
         proxyStatus = upstream.status;
         proxyBody = text.slice(0, 5000);
+        proxyContentType = upstream.headers.get('content-type') ?? undefined;
         let parsed: unknown;
         try {
           parsed = JSON.parse(text);
@@ -485,7 +495,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         writeLog();
         return;
       }
-      const outcome = crudOutcome(route, routeParams, req, crudStores, crudCounters);
+      const outcome = crudOutcome(serviceId, route, routeParams, req, crudStores, crudCounters);
       status = outcome.status;
       res.status(status).json(outcome.body);
       writeLog();
@@ -544,6 +554,19 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         return idCounter;
       },
     };
+    /* 文本模式（生效 Content-Type 非 JSON 且 body 为字符串）：占位符按文本注入后原样发送；Content-Type 由 contentType 字段/自定义头声明 */
+    if (!isJsonContentType(effectiveResponseContentType(result.response)) && typeof result.response.body === 'string') {
+      const text = renderString(result.response.body, templateCtx);
+      if (result.response.contentType) {
+        res.type(result.response.contentType);
+      }
+      applyResponseHeaders(res, result.response.headers, templateCtx);
+      status = result.response.status;
+      res.status(status).send(text);
+      writeLog();
+      return;
+    }
+
     let rendered: unknown;
     if (typeof result.response.body === 'string' && result.response.body.includes('{{')) {
       /* 模板文本 body（占位符可出现在值位置）：文本级替换后是合法 JSON 则按 JSON 响应，否则按文本响应 */
@@ -572,13 +595,13 @@ export function createApp(registry: RouteRegistry, manager: ServiceManager, opti
   const app = express();
   app.use(express.json({ limit: '10mb' }));
 
-  // 主端口分发共享的计数器与状态存储（key = routeId）
+  // 主端口分发共享的计数器与状态存储（key = routeId；CRUD 存储键 = serviceId + 集合路径）
   const deps: DispatchDeps = {
     logs: options.logs,
     idCounters: new Map<string, number>(),
     seqCounters: new Map<string, number>(),
-    crudStores: new Map<string, Map<string, Record<string, unknown>>>(),
-    crudCounters: new Map<string, number>(),
+    crudStores: options.crudStores ?? new Map<string, Map<string, Record<string, unknown>>>(),
+    crudCounters: options.crudCounters ?? new Map<string, number>(),
     proxyAllowHosts: options.proxyAllowHosts,
   };
 
@@ -589,6 +612,7 @@ export function createApp(registry: RouteRegistry, manager: ServiceManager, opti
     adminToken: options.adminToken,
     proxyAllowHosts: options.proxyAllowHosts,
     mode: options.mode,
+    crudStores: deps.crudStores,
   }));
 
   // ---- 路径模式：/{basePath}/** 剥离前缀后分发到对应服务；未命中前缀回退后续处理（静态资源 / 默认服务）----

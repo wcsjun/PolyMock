@@ -36,6 +36,10 @@
     },
     {
       "name": "Mock 分发"
+    },
+    {
+      "name": "有状态 CRUD",
+      "description": "有状态 CRUD 集合的内存存储（重启即清）"
     }
   ],
   "security": [],
@@ -1006,6 +1010,97 @@
         }
       }
     },
+    "/__polymock/crud": {
+      "get": {
+        "tags": [
+          "有状态 CRUD"
+        ],
+        "summary": "查看 CRUD 集合存储",
+        "operationId": "listCrudStores",
+        "description": "返回全部服务的 CRUD 集合与资源明细（内存态，重启即清）。键为 serviceId + 集合路径，跨服务相互隔离。",
+        "responses": {
+          "200": {
+            "description": "集合列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "collections"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "collections": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrudCollection"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "有状态 CRUD"
+        ],
+        "summary": "清空 CRUD 集合存储",
+        "operationId": "clearCrudStores",
+        "description": "按 serviceId / collection 查询参数过滤清空，均可单独或组合指定；均缺省时清空全部。",
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已清空（cleared 为清理的资源条数）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "cleared"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "cleared": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/hello": {
       "get": {
         "tags": [
@@ -1258,10 +1353,10 @@
           },
           "contentType": {
             "type": "string",
-            "description": "响应 Content-Type；缺省 application/json"
+            "description": "响应 Content-Type；缺省按 application/json 处理并严格校验 JSON body，声明为非 JSON 类型（如 text/html）时 body 按原样文本存储与发送"
           },
           "body": {
-            "description": "响应体；支持模板占位符"
+            "description": "响应体；JSON 模式（未声明或 JSON 类 Content-Type）支持模板占位符；文本模式（非 JSON Content-Type）为原样文本字符串，同样支持模板"
           }
         }
       },
@@ -1576,6 +1671,41 @@
           "proxyBody": {
             "type": "string",
             "description": "上游响应体预览（截断 5000 字符）"
+          },
+          "proxyContentType": {
+            "type": "string",
+            "description": "上游响应 Content-Type（代理时），「保存为接口」据此判定 JSON/文本模式"
+          }
+        }
+      },
+      "CrudCollection": {
+        "type": "object",
+        "required": [
+          "serviceId",
+          "collection",
+          "count",
+          "records"
+        ],
+        "properties": {
+          "serviceId": {
+            "type": "string",
+            "description": "所属服务分组 id"
+          },
+          "collection": {
+            "type": "string",
+            "description": "集合键：去掉 :参数 段后的路径，如 api/todos"
+          },
+          "count": {
+            "type": "integer",
+            "description": "资源条数"
+          },
+          "records": {
+            "type": "array",
+            "description": "集合内全部资源（插入序）",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
           }
         }
       }

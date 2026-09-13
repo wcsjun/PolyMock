@@ -3,11 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { createRoute, updateRoute } from '../api';
 import type { ConditionRow, NotifyFn, PolyMockMode, Route, RouteAuth, RoutePayload, ResponseHeader, ServiceInfo } from '../types';
 import {
+  buildCompanionRoutes,
   buildRouteRequest,
   bodyRowsToJsonValue,
   formatBody,
+  isJsonContentType,
   isTemplateJsonValid,
   jsonValueToBodyRows,
+  methodColor,
   parseSequenceDraft,
   sequenceToDraftText,
   serviceDisplaySuffix,
@@ -58,6 +61,9 @@ const BODY_COND_PLACEHOLDER = `{
 /* 响应 body 模板说明（含 {{ }} 字面量，须经 :title 绑定常量，避免被模板插值解析） */
 const TEMPLATE_HINT_TITLE =
   'body 字符串支持：{{query.参数名}} {{header.头名}} {{body.点路径}} {{params.参数名}} {{$id}} 自增 {{$now}} 当前时间 {{$int(1,99)}} 随机整数；占位符可直接作为 JSON 值使用（按渲染结果类型注入）';
+
+/* 文本模式（非 JSON Content-Type）下 body 编辑器的占位提示 */
+const TEXT_BODY_PLACEHOLDER = '任意文本，如 <h1>hello {{params.name}}</h1>——原样发送，支持模板占位符，无需合法 JSON';
 
 /* 路径参数提示（含 {{ }} 字面量，同上须经常量绑定渲染） */
 const PATH_PARAM_HINT = '支持 :参数 段，如 /api/users/:id，响应模板可用 {{params.id}}';
@@ -129,6 +135,37 @@ const sequenceInvalid = ref(false);
 /* 有状态 CRUD 开关，随 payload.crud 提交 */
 const crudFlag = ref(false);
 
+/* ---------- 一键创建配套路由（仅新建态） ---------- */
+
+interface CompanionDraft {
+  key: string;
+  method: string;
+  path: string;
+  name: string;
+}
+
+const companionSelection = ref<Record<string, boolean>>({});
+
+/** 由当前路径/方法/名称推导同集合的其余 CRUD 操作（已排除主路由自身）；主路由为条目路径时同样成立 */
+const companionRoutes = computed<CompanionDraft[]>(() => {
+  if (!crudFlag.value || props.editing) return [];
+  const routePath = path.value.trim();
+  if (!routePath.startsWith('/')) return [];
+  return buildCompanionRoutes(routePath, method.value, name.value).map((companion) => ({
+    key: `${companion.method} ${companion.path}`,
+    method: companion.method,
+    path: companion.path,
+    name: companion.name,
+  }));
+});
+
+/* 新出现的配套路由默认勾选；已手动取消过的保持取消 */
+watch(companionRoutes, (list) => {
+  for (const companion of list) {
+    if (!(companion.key in companionSelection.value)) companionSelection.value[companion.key] = true;
+  }
+});
+
 /* 路由级认证：none 关闭；apikey = 自定义 header 携带密钥；bearer = Authorization: Bearer <token> */
 const authType = ref<'none' | 'apikey' | 'bearer'>('none');
 const authValue = ref('');
@@ -196,6 +233,17 @@ const blockHint = computed(() => {
   }
   return '命中条件：请求满足所有启用行时命中本场景';
 });
+
+/* ---------- 生效 Content-Type：自定义响应头中的 Content-Type 行决定 JSON/文本模式 ---------- */
+
+/** 场景是否 JSON 模式（响应头里 Content-Type 行非 JSON 时为文本模式） */
+function sceneIsJsonMode(scene: SceneDraft): boolean {
+  const ctRow = scene.headerRows.find((h) => h.key.trim().toLowerCase() === 'content-type');
+  return isJsonContentType(ctRow?.value.trim() || undefined);
+}
+
+/** 当前编辑场景是否文本模式（body 编辑器据此切换校验与提示） */
+const activeSceneTextMode = computed(() => !sceneIsJsonMode(activeScene.value));
 
 /* 服务下拉：选中项跨渲染保持；列表变化后若选中项不存在则回落到第一项 */
 watch(
@@ -279,6 +327,7 @@ function resetForm() {
   sequenceText.value = '';
   sequenceInvalid.value = false;
   crudFlag.value = false;
+  companionSelection.value = {};
   authType.value = 'none';
   authValue.value = '';
   authHeader.value = '';
@@ -357,10 +406,10 @@ function ensureJson(text: string, label: string, markInvalid: () => void): boole
   return false;
 }
 
-/** body 失焦时即时校验，非法标红 */
+/** body 失焦时即时校验，非法标红；文本模式（响应头声明非 JSON Content-Type）不做 JSON 校验 */
 function validateBodyText(scene: SceneDraft) {
   const raw = scene.bodyText.trim();
-  scene.invalid = raw ? !isTemplateJsonValid(raw) : false;
+  scene.invalid = raw && sceneIsJsonMode(scene) ? !isTemplateJsonValid(raw) : false;
 }
 
 /** body 输入过程中仅在标红状态下复检，便于即时消除错误 */
@@ -378,9 +427,13 @@ function onSequenceInput() {
   if (sequenceInvalid.value) validateSequenceText();
 }
 
-/** 格式化当前场景的 body 文本；非法时报错并标红 */
+/** 格式化当前场景的 body 文本；非法时报错并标红；文本模式不做 JSON 格式化 */
 function formatBodyText() {
   const scene = activeScene.value;
+  if (!sceneIsJsonMode(scene)) {
+    props.notify('当前场景为文本 body（响应头声明了非 JSON Content-Type），不做 JSON 格式化', 'warn');
+    return;
+  }
   const raw = scene.bodyText.trim();
   if (!raw) return;
   if (raw.includes('{{')) {
@@ -424,7 +477,7 @@ async function submit() {
     return;
   }
 
-  if (!ensureJson(def.bodyText, '默认响应 body', () => { def.invalid = true; })) return;
+  if (sceneIsJsonMode(def) && !ensureJson(def.bodyText, '默认响应 body', () => { def.invalid = true; })) return;
 
   const seenNames = new Set<string>();
   for (const scene of variantDrafts) {
@@ -438,7 +491,7 @@ async function submit() {
       return;
     }
     seenNames.add(sceneName);
-    if (!ensureJson(scene.bodyText, `场景「${sceneName}」的 body`, () => { scene.invalid = true; })) return;
+    if (sceneIsJsonMode(scene) && !ensureJson(scene.bodyText, `场景「${sceneName}」的 body`, () => { scene.invalid = true; })) return;
   }
 
   /* 高级选项数值校验：延迟/抖动 0-60000，故障率 0-100 */
@@ -532,7 +585,36 @@ async function submit() {
       emit('cancel-edit');
     } else {
       await createRoute(payload);
-      props.notify(`已注册 ${routeMethod} ${routePath}`);
+      /* 一键创建配套 CRUD 路由：复用现有注册端点循环提交（仅 crud:true + auth 语义随行，条件/变体不携带）；已存在（形状冲突 409）跳过并汇总 */
+      const companions = companionRoutes.value.filter((c) => companionSelection.value[c.key] !== false);
+      let created = 0;
+      let skipped = 0;
+      let failed = 0;
+      for (const companion of companions) {
+        try {
+          await createRoute({
+            serviceId: payload.serviceId,
+            method: companion.method,
+            path: companion.path,
+            name: companion.name,
+            response: { status: 200, body: '{}' },
+            crud: true,
+            ...(authPayload ? { auth: authPayload } : {}),
+          });
+          created += 1;
+        } catch (err) {
+          if (String((err as Error).message).includes('形状冲突')) skipped += 1;
+          else failed += 1;
+        }
+      }
+      const summary: string[] = [];
+      if (created) summary.push(`新建配套 ${created} 条`);
+      if (skipped) summary.push(`跳过已存在 ${skipped} 条`);
+      if (failed) {
+        props.notify(`已注册 ${routeMethod} ${routePath}；${summary.length ? summary.join('，') + '，' : ''}${failed} 条配套路由创建失败`, 'warn');
+      } else {
+        props.notify(summary.length ? `已注册 ${routeMethod} ${routePath}（${summary.join('，')}）` : `已注册 ${routeMethod} ${routePath}`);
+      }
       resetForm();
     }
     emit('changed');
@@ -696,6 +778,7 @@ async function submit() {
                 <span v-if="activeIsDefault" class="hint">无场景命中时返回</span>
                 <span class="hint" :title="TEMPLATE_HINT_TITLE">模板可用</span>
                 <button type="button" class="mini-btn" title="格式化 JSON" @click="formatBodyText">格式化</button>
+                <span v-if="activeSceneTextMode" class="text-mode-badge" title="响应头声明了非 JSON Content-Type：body 按原样文本发送，不做 JSON 校验">文本模式</span>
               </span>
             </div>
             <input v-model.number="activeScene.status" aria-label="响应状态码" type="number" min="100" max="599">
@@ -714,7 +797,7 @@ async function submit() {
             <textarea
               v-model="activeScene.bodyText"
               rows="8"
-              :placeholder="BODY_PLACEHOLDER"
+              :placeholder="activeSceneTextMode ? TEXT_BODY_PLACEHOLDER : BODY_PLACEHOLDER"
               spellcheck="false"
               :class="{ invalid: activeScene.invalid }"
               @blur="validateBodyText(activeScene)"
@@ -787,11 +870,24 @@ async function submit() {
         <label class="switch-row" for="f-crud">
           <span class="switch-text">
             <span class="switch-title">有状态 CRUD</span>
-            <span class="hint">集合路由（无参数段）：GET=列表、POST=创建；条目路由（含 :id）：GET/PUT/DELETE 存取。需为同一集合分别注册路由</span>
+            <span class="hint">集合路由（无参数段）：GET=列表、POST=创建；条目路由（含 :id）：GET/PUT/DELETE 存取。开启后响应配置将被忽略，改由内存集合数据响应</span>
           </span>
           <input id="f-crud" v-model="crudFlag" type="checkbox" class="switch-input">
           <span class="switch-ui" aria-hidden="true"></span>
         </label>
+
+        <!-- 一键创建配套路由（仅新建态）：以当前路径推导同集合的其余操作，数据同库 -->
+        <div v-if="crudFlag && !editing" class="field crud-companions">
+          <p class="crud-companions-title">一键创建配套路由</p>
+          <p class="hint">以当前路径为 CRUD集合自动注册其余操作（已排除当前接口），共享同一份数据；更新固定为 PUT（浅合并）</p>
+          <label v-for="c in companionRoutes" :key="c.key" class="companion-row">
+            <input v-model="companionSelection[c.key]" type="checkbox" class="companion-check">
+            <span class="companion-method" :style="{ color: methodColor(c.method) }">{{ c.method }}</span>
+            <span class="companion-path">{{ c.path }}</span>
+            <span class="companion-name">{{ c.name }}</span>
+          </label>
+          <p v-if="!companionRoutes.length" class="hint">填写以 / 开头的路径后，这里会列出可一并创建的配套路由</p>
+        </div>
 
         <!-- 路由级认证：模拟后端鉴权，未携带正确凭证返回 401 -->
         <div class="field">
@@ -1057,5 +1153,71 @@ async function submit() {
 .rh-del:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+/* 文本模式徽标：响应头声明非 JSON Content-Type 时的 body 编辑提示 */
+.text-mode-badge {
+  padding: 2px 8px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------- 一键创建配套路由 ---------- */
+.crud-companions {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.crud-companions-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.companion-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  cursor: pointer;
+  border-bottom: 1px dashed var(--line);
+}
+
+.companion-row:last-of-type {
+  border-bottom: none;
+}
+
+.companion-check {
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.companion-method {
+  flex: none;
+  width: 46px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.companion-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.companion-name {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
 }
 </style>

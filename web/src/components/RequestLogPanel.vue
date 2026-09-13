@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { clearRequests, createRoute, fetchRequests, getAdminToken } from '../api';
 import type { NotifyFn, RequestLogEntry, ServiceInfo } from '../types';
-import { buildCurl, copyText, routeCardStyle } from '../utils';
+import { buildCurl, copyText, isJsonContentType, routeCardStyle } from '../utils';
 
 const props = defineProps<{
   active: boolean;
@@ -207,15 +207,21 @@ async function clearAll() {
   }
 }
 
-/** 把代理响应原文录制为新接口（服务/方法/路径取自该条日志） */
+/** 把代理响应原文录制为新接口（服务/方法/路径取自该条日志）；
+ *  上游为 JSON 时格式化存储，非 JSON（按上游 Content-Type 判定）按文本 body + contentType 保存 */
 async function saveAsRoute(entry: RequestLogEntry) {
   if (!entry.proxyBody) return;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(entry.proxyBody);
-  } catch {
-    props.notify('响应原文不是合法 JSON，无法保存为接口', 'err');
-    return;
+  const isJson = isJsonContentType(entry.proxyContentType);
+  let body: string;
+  if (isJson) {
+    try {
+      body = JSON.stringify(JSON.parse(entry.proxyBody));
+    } catch {
+      props.notify('响应原文不是合法 JSON，无法保存为接口', 'err');
+      return;
+    }
+  } else {
+    body = entry.proxyBody;
   }
   try {
     await createRoute({
@@ -225,7 +231,8 @@ async function saveAsRoute(entry: RequestLogEntry) {
       name: `${entry.method} ${entry.path}（录制）`,
       response: {
         status: entry.proxyStatus ?? 200,
-        body: JSON.stringify(parsed),
+        ...(isJson ? {} : { contentType: entry.proxyContentType }),
+        body,
       },
     });
     props.notify(`已保存 ${entry.method} ${entry.path} 为接口`);

@@ -167,12 +167,26 @@ export interface RequestLogEntry {
   proxyStatus?: number;
   /** 代理响应原文（截断），用于「保存为接口」 */
   proxyBody?: string;
+  /** 代理响应 Content-Type，「保存为接口」据此判定 JSON/文本模式 */
+  proxyContentType?: string;
 }
 
 /** 全局设置（持久化到 polymock.config.json） */
 export interface MockSettings {
   /** 全局场景集：设置后所有拥有同名变体的接口强制命中该变体（绕过其条件） */
   activeVariant?: string | null;
+}
+
+/** GET /__polymock/crud 返回的 CRUD 集合存储（运行时内存态，重启即清） */
+export interface CrudCollectionStore {
+  /** 所属服务分组 id */
+  serviceId: string;
+  /** 集合键：去掉 :参数 段后的路径，如 api/todos */
+  collection: string;
+  /** 资源条数 */
+  count: number;
+  /** 集合内全部资源（插入序） */
+  records: Array<Record<string, unknown>>;
 }
 
 export type ViewName = 'routes' | 'embed' | 'logs';

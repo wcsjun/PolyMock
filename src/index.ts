@@ -40,19 +40,26 @@ if (defaultService) {
   registry.addService('默认服务', port, DEFAULT_SERVICE_ID);
 }
 
-/* findAny：默认路由即使被禁用也不重新播种 */
-if (!registry.findAny(DEFAULT_SERVICE_ID, 'GET', '/api/hello')) {
+/* findAny：默认路由即使被禁用也不重新播种；旧配置中无名称的默认路由补一个展示名称 */
+const helloRoute = registry.findAny(DEFAULT_SERVICE_ID, 'GET', '/api/hello');
+if (!helloRoute) {
   registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', {
     status: 200,
     body: { message: 'Hello from PolyMock', hint: '在控制台新增你的接口' },
-  });
+  }, '默认示例接口');
+} else if (!helloRoute.name) {
+  registry.update(helloRoute.id, { name: '默认示例接口' });
 }
 
 const logs = new RequestLogStore();
-const manager = new ServiceManager(registry, { logs }, { singlePort: mode === 'path' });
+/* 有状态 CRUD 共享存储与 id 计数：主应用（默认服务 / 路径模式）与各独立端口服务共用同一份，
+   键为 serviceId + 集合路径，跨服务相互隔离；管理端 GET/DELETE /__polymock/crud 读取与清空 */
+const crudStores = new Map<string, Map<string, Record<string, unknown>>>();
+const crudCounters = new Map<string, number>();
+const manager = new ServiceManager(registry, { logs, crudStores, crudCounters }, { singlePort: mode === 'path' });
 void manager.startAll(registry.listServices().filter((s) => s.id !== DEFAULT_SERVICE_ID));
 
-const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts, mode });
+const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts, mode, crudStores, crudCounters });
 
 /* 回环地址集合：host 为这些值时管理 API 不暴露给外部网络 */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);

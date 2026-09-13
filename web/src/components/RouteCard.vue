@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { NotifyFn, Route } from '../types';
-import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, routeCardStyle, routeUrl, toJavaEntity } from '../utils';
+import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, responseContentTypeLabel, routeCardStyle, routeUrl, toJavaEntity } from '../utils';
 
 const props = defineProps<{
   route: Route;
@@ -22,6 +22,8 @@ const emit = defineEmits<{
 const cardStyle = computed(() => routeCardStyle(props.route.method, props.index));
 const bodyPreview = computed(() => formatBody(props.route.response.body));
 const variants = computed(() => props.route.variants ?? []);
+/* 生效响应 Content-Type：自定义头 Content-Type 优先于 contentType 字段（未设置显示缺省 application/json） */
+const contentTypeLabel = computed(() => responseContentTypeLabel(props.route.response));
 
 /* ---------- 复制菜单：地址 / curl / fetch / Java 实体 ---------- */
 
@@ -152,7 +154,7 @@ function openInBrowser() {
     </div>
     <div class="route-meta">
       <span class="route-status" :class="{ bad: route.response.status >= 400 }">HTTP {{ route.response.status }}</span>
-      <span>application/json</span>
+      <span :title="`响应 Content-Type（自定义头 Content-Type 优先于 contentType 字段）`">{{ contentTypeLabel }}</span>
       <span v-if="variants.length" class="route-chip">{{ variants.length }} 个变体</span>
       <span v-if="route.requireMatch" class="route-chip guard">需匹配</span>
       <span v-if="route.auth" class="route-chip guard">认证 {{ route.auth.type === 'bearer' ? 'Bearer' : 'APIKey' }}</span>

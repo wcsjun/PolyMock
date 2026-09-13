@@ -26,8 +26,11 @@ describe('createApp 集成测试', () => {
     registry.addService('默认服务', 8080, DEFAULT_SERVICE_ID);
     registry.add(DEFAULT_SERVICE_ID, 'GET', '/api/hello', { status: 200, body: { message: 'hi' } });
     logs = new RequestLogStore();
-    manager = new ServiceManager(registry, { logs });
-    app = createApp(registry, manager, { mainPort: 8080, logs });
+    /* CRUD 共享存储注入（装配方式与 index.ts 一致）：管理端 /crud 端点借此查看各服务的存储 */
+    const crudStores = new Map<string, Map<string, Record<string, unknown>>>();
+    const crudCounters = new Map<string, number>();
+    manager = new ServiceManager(registry, { logs, crudStores, crudCounters });
+    app = createApp(registry, manager, { mainPort: 8080, logs, crudStores, crudCounters });
     server = await listen(app);
     freePort = await getFreePort();
   });
@@ -1194,6 +1197,75 @@ describe('createApp 集成测试', () => {
     expect(gone.status).toBe(404);
   });
 
+  it('有状态 CRUD：存储按服务隔离（键含 serviceId），GET /__polymock/crud 查看各服务集合', async () => {
+    const created = await fetch(`${server.baseUrl}/__polymock/services`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '隔离服务', port: freePort }),
+    });
+    expect(created.status).toBe(201);
+    createdServiceId = ((await created.json()) as { service: { id: string } }).service.id;
+
+    /* 两个服务注册同形状的 CRUD 集合路径 */
+    await registerRoute({ name: '默认列表', method: 'GET', path: '/api/shared', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '默认创建', method: 'POST', path: '/api/shared', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ serviceId: createdServiceId, name: '隔离列表', method: 'GET', path: '/api/shared', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ serviceId: createdServiceId, name: '隔离创建', method: 'POST', path: '/api/shared', crud: true, response: { status: 200, body: {} } });
+
+    const post = (url: string, body: unknown) =>
+      fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    await post(`${server.baseUrl}/api/shared`, { from: 'default' });
+    await post(`http://127.0.0.1:${freePort}/api/shared`, { from: 'svc' });
+
+    /* 同形状路径互不可见：各自只读到本服务的数据 */
+    const defList = (await (await fetch(`${server.baseUrl}/api/shared`)).json()) as Array<Record<string, unknown>>;
+    expect(defList).toEqual([{ from: 'default', id: 'rec-1' }]);
+    const svcList = (await (await fetch(`http://127.0.0.1:${freePort}/api/shared`)).json()) as Array<Record<string, unknown>>;
+    expect(svcList).toEqual([{ from: 'svc', id: 'rec-1' }]);
+
+    /* 管理端查看：两个集合各自归属与资源 */
+    const crudRes = await fetch(`${server.baseUrl}/__polymock/crud`);
+    const body = (await crudRes.json()) as {
+      ok: boolean;
+      collections: Array<{ serviceId: string; collection: string; count: number; records: Array<Record<string, unknown>> }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.collections).toHaveLength(2);
+    expect(body.collections.find((c) => c.serviceId === DEFAULT_SERVICE_ID)).toMatchObject({
+      collection: 'api/shared',
+      count: 1,
+      records: [{ from: 'default', id: 'rec-1' }],
+    });
+    expect(body.collections.find((c) => c.serviceId === createdServiceId)).toMatchObject({
+      collection: 'api/shared',
+      count: 1,
+      records: [{ from: 'svc', id: 'rec-1' }],
+    });
+  });
+
+  it('管理 API：DELETE /__polymock/crud 按 collection 过滤清空，缺省清空全部', async () => {
+    await registerRoute({ name: '集合A-列表', method: 'GET', path: '/api/ca', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '集合A-创建', method: 'POST', path: '/api/ca', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '集合B-列表', method: 'GET', path: '/api/cb', crud: true, response: { status: 200, body: {} } });
+    await registerRoute({ name: '集合B-创建', method: 'POST', path: '/api/cb', crud: true, response: { status: 200, body: {} } });
+    const post = (path: string) =>
+      fetch(`${server.baseUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ x: 1 }) });
+    await post('/api/ca');
+    await post('/api/ca');
+    await post('/api/cb');
+
+    /* 只清集合 A：返回清理条数，集合 B 不受影响 */
+    const clearA = await fetch(`${server.baseUrl}/__polymock/crud?collection=api/ca`, { method: 'DELETE' });
+    expect(((await clearA.json()) as { ok: boolean; cleared: number }).cleared).toBe(2);
+    expect((await (await fetch(`${server.baseUrl}/api/ca`)).json()) as unknown[]).toEqual([]);
+    expect(((await (await fetch(`${server.baseUrl}/api/cb`)).json()) as unknown[])).toHaveLength(1);
+
+    /* 缺省清空全部 */
+    const clearAll = await fetch(`${server.baseUrl}/__polymock/crud`, { method: 'DELETE' });
+    expect(((await clearAll.json()) as { ok: boolean; cleared: number }).cleared).toBe(1);
+    expect((await (await fetch(`${server.baseUrl}/api/cb`)).json()) as unknown[]).toEqual([]);
+  });
+
   it('CRUD 校验：crud 需为布尔值；PUT 仅含 crud 字段可作为 patch', async () => {
     const bad = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',
@@ -1206,6 +1278,97 @@ describe('createApp 集成测试', () => {
     const patched = await putRoute(id, { crud: true });
     expect(patched.status).toBe(200);
     expect(patched.route?.crud).toBe(true);
+  });
+
+  it('文本响应：生效 Content-Type 非 JSON 时 body 原样存储与发送，模板仍渲染', async () => {
+    await registerRoute({
+      name: 'HTML 页面',
+      method: 'GET',
+      path: '/page/:name',
+      response: { status: 200, contentType: 'text/html', body: '<h1>hello {{params.name}}</h1>' },
+    });
+    const res = await fetch(`${server.baseUrl}/page/polymock`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    await expect(res.text()).resolves.toBe('<h1>hello polymock</h1>');
+  });
+
+  it('文本响应：自定义头 Content-Type 优先于 contentType 字段；PUT 可切换为文本模式', async () => {
+    await registerRoute({
+      name: '头优先',
+      method: 'GET',
+      path: '/ct-header',
+      response: { status: 200, contentType: 'application/json', headers: [{ key: 'Content-Type', value: 'text/plain' }], body: 'plain text' },
+    });
+    const res = await fetch(`${server.baseUrl}/ct-header`);
+    expect(res.headers.get('content-type')).toContain('text/plain');
+    await expect(res.text()).resolves.toBe('plain text');
+
+    /* PUT 把 JSON 接口整体切换为文本模式 */
+    const id = await registerRoute({ name: '切换', method: 'GET', path: '/switch-ct', response: { status: 200, body: { a: 1 } } });
+    const put = await fetch(`${server.baseUrl}/__polymock/routes/${id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ response: { status: 200, contentType: 'text/plain', body: 'now text' } }),
+    });
+    expect(put.status).toBe(200);
+    const switched = await fetch(`${server.baseUrl}/switch-ct`);
+    expect(switched.headers.get('content-type')).toContain('text/plain');
+    await expect(switched.text()).resolves.toBe('now text');
+  });
+
+  it('文本响应：非 JSON Content-Type 携带对象 body 返回 400，JSON 模式坏 body 仍拒绝', async () => {
+    const objectBody = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏文本', method: 'GET', path: '/bad-text', response: { status: 200, contentType: 'text/html', body: { a: 1 } } }),
+    });
+    expect(objectBody.status).toBe(400);
+    expect(((await objectBody.json()) as { error: string }).error).toContain('文本字符串');
+
+    const badJson = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏JSON', method: 'GET', path: '/bad-json', response: { status: 200, body: '{broken' } }),
+    });
+    expect(badJson.status).toBe(400);
+    expect(((await badJson.json()) as { error: string }).error).toContain('不是合法的 JSON');
+  });
+
+  it('文本响应：变体按自身 headers 判定，JSON 默认与文本变体可混搭', async () => {
+    await registerRoute({
+      name: '混合响应',
+      method: 'GET',
+      path: '/mixed',
+      response: { status: 200, body: { json: true } },
+      variants: [
+        { name: 'HTML 变体', match: { headers: [{ key: 'X-Mode', value: 'html' }] }, response: { status: 200, headers: [{ key: 'Content-Type', value: 'text/html' }], body: '<b>html</b>' } },
+      ],
+    });
+    const html = await fetch(`${server.baseUrl}/mixed`, { headers: { 'X-Mode': 'html' } });
+    expect(html.headers.get('content-type')).toContain('text/html');
+    await expect(html.text()).resolves.toBe('<b>html</b>');
+
+    const json = await fetch(`${server.baseUrl}/mixed`);
+    expect(await json.json()).toEqual({ json: true });
+  });
+
+  it('文本响应：序列步骤按自身 headers 判定并原样发送', async () => {
+    await registerRoute({
+      name: '序列文本',
+      method: 'GET',
+      path: '/seq-text',
+      response: { status: 200, body: {} },
+      sequence: [
+        { status: 200, body: '<step1/>', headers: [{ key: 'Content-Type', value: 'application/xml' }] },
+        { status: 200, body: { step: 2 } },
+      ],
+    });
+    const first = await fetch(`${server.baseUrl}/seq-text`);
+    expect(first.headers.get('content-type')).toContain('application/xml');
+    await expect(first.text()).resolves.toBe('<step1/>');
+    const second = await fetch(`${server.baseUrl}/seq-text`);
+    expect(await second.json()).toEqual({ step: 2 });
   });
 
   it('SSE /events：实时推送请求日志（event: log + 条目 JSON）', async () => {
@@ -1443,6 +1606,50 @@ describe('路径模式（POLYMOCK_MODE=path）', () => {
     const fallback = await fetch(`${server.baseUrl}/api/hello`);
     expect(fallback.status).toBe(200);
     expect(await fallback.json()).toEqual({ from: 'default' });
+  });
+
+  it('路径模式：不同服务同形状 CRUD 路径数据相互隔离（键含 serviceId）', async () => {
+    const mkService = async (name: string, basePath: string) => {
+      const res = await fetch(`${server.baseUrl}/__polymock/services`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, basePath }),
+      });
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { service: { id: string } }).service.id;
+    };
+    const order = await mkService('订单服务', 'order');
+    const user = await mkService('用户服务', 'user');
+
+    const reg = (serviceId: string, method: string, name: string) =>
+      fetch(`${server.baseUrl}/__polymock/routes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ serviceId, method, name, path: '/api/items', crud: true, response: { status: 200, body: {} } }),
+      });
+    await reg(order, 'POST', '订单条目创建');
+    await reg(user, 'GET', '用户条目列表');
+
+    await fetch(`${server.baseUrl}/order/api/items`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ from: 'order' }),
+    });
+
+    /* 用户服务同路径集合不串数据（修复前会读到订单服务的数据） */
+    const userList = (await (await fetch(`${server.baseUrl}/user/api/items`)).json()) as unknown[];
+    expect(userList).toEqual([]);
+
+    /* 存储端视角：两个服务各自独立的集合，计数 1 与 0 */
+    const crudBody = (await (await fetch(`${server.baseUrl}/__polymock/crud`)).json()) as {
+      ok: boolean;
+      collections: Array<{ serviceId: string; collection: string; count: number }>;
+    };
+    expect(crudBody.ok).toBe(true);
+    expect(crudBody.collections).toEqual([
+      { serviceId: order, collection: 'api/items', count: 1, records: [{ from: 'order', id: 'rec-1' }] },
+      { serviceId: user, collection: 'api/items', count: 0, records: [] },
+    ]);
   });
 
   it('PUT /services/:id/basePath 修改前缀，默认服务拒绝设置', async () => {

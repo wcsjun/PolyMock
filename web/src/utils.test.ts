@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildCompanionRoutes,
   buildCurl,
   clampDrawerWidth,
   clearDrawerWidth,
+  crudCollectionKey,
+  groupCrudRoutes,
+  isJsonContentType,
   isTemplateJsonValid,
   buildFetchSnippet,
   bodyRowsToJsonValue,
@@ -10,13 +14,15 @@ import {
   jsonValueToBodyRows,
   loadDrawerWidth,
   parseSequenceDraft,
+  proxyTargetLabel,
+  responseContentTypeLabel,
   saveDrawerWidth,
   sequenceToDraftText,
   serviceDisplaySuffix,
   splitRouteRequest,
   toJavaEntity,
 } from './utils';
-import type { ConditionRow } from './types';
+import type { ConditionRow, Route } from './types';
 
 /** 快捷构造条件行：缺省 type=string / required=true / enabled=true */
 function row(overrides: Partial<ConditionRow> & Pick<ConditionRow, 'key' | 'value'>): ConditionRow {
@@ -323,5 +329,106 @@ describe('clampDrawerWidth / 抽屉宽度持久化', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+/* ---------- 有状态 CRUD：集合键 / 分组 / 配套路由 ---------- */
+
+/** 快捷构造 Route（分组/配套路由测试用） */
+function routeOf(overrides: Partial<Route> & Pick<Route, 'id' | 'serviceId' | 'method' | 'path'>): Route {
+  return { protocol: 'http', response: { status: 200, body: {} }, createdAt: 0, ...overrides };
+}
+
+describe('有状态 CRUD 工具', () => {
+  it('crudCollectionKey 去掉参数段得到集合键（与后端分库规则一致）', () => {
+    expect(crudCollectionKey('/api/todos')).toBe('api/todos');
+    expect(crudCollectionKey('/api/todos/:id')).toBe('api/todos');
+    expect(crudCollectionKey('/api/todos/:todoId/comments/:cid')).toBe('api/todos/comments');
+    expect(crudCollectionKey('/')).toBe('');
+  });
+
+  it('groupCrudRoutes 按服务+集合键聚类，仅收 crud 路由，组内保持顺序', () => {
+    const routes = [
+      routeOf({ id: '1', serviceId: 'svc-a', method: 'GET', path: '/api/todos', crud: true }),
+      routeOf({ id: '2', serviceId: 'svc-a', method: 'GET', path: '/api/plain', name: '普通接口' }),
+      routeOf({ id: '3', serviceId: 'svc-a', method: 'POST', path: '/api/todos', crud: true }),
+      routeOf({ id: '4', serviceId: 'svc-a', method: 'GET', path: '/api/todos/:id', crud: true }),
+      routeOf({ id: '5', serviceId: 'svc-b', method: 'GET', path: '/api/todos', crud: true }),
+      routeOf({ id: '6', serviceId: 'svc-a', method: 'GET', path: '/api/archived', crud: true }),
+    ];
+    const groups = groupCrudRoutes(routes);
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toMatchObject({ serviceId: 'svc-a', collection: 'api/todos' });
+    expect(groups[0].routes.map((r) => r.id)).toEqual(['1', '3', '4']);
+    expect(groups[1]).toMatchObject({ serviceId: 'svc-b', collection: 'api/todos' });
+    expect(groups[2]).toMatchObject({ serviceId: 'svc-a', collection: 'api/archived' });
+  });
+
+  it('buildCompanionRoutes 推导配套路由并排除主路由自身，名称追加标签', () => {
+    const companions = buildCompanionRoutes('/api/todos', 'GET', '待办');
+    expect(companions).toEqual([
+      { method: 'POST', path: '/api/todos', name: '待办·创建', label: '创建' },
+      { method: 'GET', path: '/api/todos/:id', name: '待办·详情', label: '详情' },
+      { method: 'PUT', path: '/api/todos/:id', name: '待办·更新', label: '更新' },
+      { method: 'DELETE', path: '/api/todos/:id', name: '待办·删除', label: '删除' },
+    ]);
+
+    /* 主路由是条目路径时：排除条目详情，补集合列表/创建 */
+    const itemMains = buildCompanionRoutes('/api/todos/:id', 'GET', '待办');
+    expect(itemMains.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /api/todos',
+      'POST /api/todos',
+      'PUT /api/todos/:id',
+      'DELETE /api/todos/:id',
+    ]);
+
+    /* 空名称回落 CRUD 前缀 */
+    expect(buildCompanionRoutes('/api/x', 'GET', '')[0].name).toBe('CRUD·创建');
+  });
+});
+
+describe('proxyTargetLabel 代理目标展示简称', () => {
+  it('提取 host:port，省略协议与路径', () => {
+    expect(proxyTargetLabel('http://localhost:3000')).toBe('localhost:3000');
+    expect(proxyTargetLabel('https://api.example.com/v1/x')).toBe('api.example.com');
+    expect(proxyTargetLabel('http://127.0.0.1')).toBe('127.0.0.1');
+  });
+
+  it('非法 URL 原样返回，超长截断', () => {
+    expect(proxyTargetLabel('not-a-url')).toBe('not-a-url');
+    expect(proxyTargetLabel('averylongunparseabletargetvalue')).toBe('averylongunparseabletarg…');
+  });
+});
+
+describe('isJsonContentType JSON 类 Content-Type 判定', () => {
+  it('未声明按 JSON；JSON 类与 *+json 后缀命中（忽略参数与大小写）', () => {
+    expect(isJsonContentType(undefined)).toBe(true);
+    expect(isJsonContentType('')).toBe(true);
+    expect(isJsonContentType('application/json')).toBe(true);
+    expect(isJsonContentType('Application/JSON; charset=utf-8')).toBe(true);
+    expect(isJsonContentType('application/vnd.api+json')).toBe(true);
+    expect(isJsonContentType('text/json')).toBe(true);
+  });
+
+  it('非 JSON 类型返回 false', () => {
+    expect(isJsonContentType('text/html')).toBe(false);
+    expect(isJsonContentType('text/plain; charset=gbk')).toBe(false);
+    expect(isJsonContentType('application/xml')).toBe(false);
+    expect(isJsonContentType('application/octet-stream')).toBe(false);
+  });
+});
+
+describe('responseContentTypeLabel 响应生效 Content-Type 标签', () => {
+  const route = (headers?: Array<{ key: string; value: string }>, contentType?: string) => ({ contentType, headers });
+
+  it('自定义头 Content-Type 优先于 contentType 字段', () => {
+    expect(responseContentTypeLabel(route([{ key: 'Content-Type', value: 'text/html' }], 'application/json'))).toBe('text/html');
+    expect(responseContentTypeLabel(route([{ key: 'content-type', value: ' text/plain ' }]))).toBe('text/plain');
+    expect(responseContentTypeLabel(route([{ key: 'X-Other', value: 'x' }], 'application/xml'))).toBe('application/xml');
+  });
+
+  it('均未设置显示缺省 application/json', () => {
+    expect(responseContentTypeLabel(route())).toBe('application/json');
+    expect(responseContentTypeLabel(route([], ''))).toBe('application/json');
   });
 });

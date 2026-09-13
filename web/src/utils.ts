@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'vue';
-import type { ConditionRow, ConditionType, PolyMockMode, RequestCondition, ResponseHeader, RouteRequest } from './types';
+import type { ConditionRow, ConditionType, PolyMockMode, RequestCondition, ResponseHeader, Route, RouteRequest } from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -17,6 +17,29 @@ export function methodColor(method: string): string {
 export function serviceDisplaySuffix(svc: { port: number; isDefault: boolean; basePath?: string }, mode: PolyMockMode): string {
   if (mode !== 'path') return `:${svc.port}`;
   return svc.isDefault ? '/' : `/${svc.basePath ?? ''}`;
+}
+
+/** 代理目标的展示简称：host:port（省略协议与路径）；非法 URL 原样返回并截断至 24 字符 */
+export function proxyTargetLabel(target: string): string {
+  try {
+    const url = new URL(target);
+    return `${url.hostname}${url.port ? `:${url.port}` : ''}`;
+  } catch {
+    return target.length > 24 ? `${target.slice(0, 24)}…` : target;
+  }
+}
+
+/** JSON 类 Content-Type 判定（与后端 isJsonContentType 规则一致）：未声明按 JSON；application/json、text/json、*+json 视为 JSON（忽略参数与大小写） */
+export function isJsonContentType(contentType?: string): boolean {
+  if (!contentType) return true;
+  const mediaType = contentType.split(';', 1)[0].trim().toLowerCase();
+  return mediaType === 'application/json' || mediaType === 'text/json' || mediaType.endsWith('+json');
+}
+
+/** 响应的生效 Content-Type 展示标签（与后端 effectiveResponseContentType 优先级一致）：自定义头 Content-Type 优先于 contentType 字段，均未设置显示缺省 application/json */
+export function responseContentTypeLabel(response: { contentType?: string; headers?: ResponseHeader[] }): string {
+  const headerCt = (response.headers ?? []).find((h) => h.key.trim().toLowerCase() === 'content-type')?.value.trim();
+  return headerCt || response.contentType?.trim() || 'application/json';
 }
 
 /** 对应原 app.js 的 formatBody()：字符串原样展示，其余格式化缩进 */
@@ -453,6 +476,63 @@ export function toJavaEntity(className: string, body: unknown): string {
   }
   const lines = ['import lombok.Data;', '', `@Data`, `public class ${cls.name} {`, ...renderClassBody(cls, 1), '}'];
   return `${lines.join('\n')}\n`;
+}
+
+/* ---------- 有状态 CRUD：集合键 / 分组 / 配套路由（与后端 crudOutcome 分库规则一致） ---------- */
+
+/** 集合键：路径去掉 :参数 段后的字面路径，如 /api/todos/:id → api/todos；同一集合的集合/条目路由共享存储 */
+export function crudCollectionKey(path: string): string {
+  return path.split('/').filter((segment) => segment && !segment.startsWith(':')).join('/');
+}
+
+/** 同一服务下同集合键的 crud 路由分组（单条也成组）；非 crud 路由不参与 */
+export interface CrudRouteGroup {
+  serviceId: string;
+  /** 集合键，如 api/todos */
+  collection: string;
+  routes: Route[];
+}
+
+/** 按服务 + 集合键聚类 crud 路由；组内保持原有（创建）顺序 */
+export function groupCrudRoutes(routes: Route[]): CrudRouteGroup[] {
+  const groups = new Map<string, CrudRouteGroup>();
+  for (const route of routes) {
+    if (route.crud !== true) continue;
+    const collection = crudCollectionKey(route.path);
+    const key = `${route.serviceId}\u0000${collection}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { serviceId: route.serviceId, collection, routes: [] };
+      groups.set(key, group);
+    }
+    group.routes.push(route);
+  }
+  return [...groups.values()];
+}
+
+/** 配套 CRUD 路由规格：集合路由无参数段，条目路由追加 /:id；更新固定 PUT（浅合并语义） */
+export const COMPANION_ROUTE_SPECS: ReadonlyArray<{ method: string; collection: boolean; label: string; param?: string }> = [
+  { method: 'GET', collection: true, label: '列表' },
+  { method: 'POST', collection: true, label: '创建' },
+  { method: 'GET', collection: false, label: '详情', param: 'id' },
+  { method: 'PUT', collection: false, label: '更新', param: 'id' },
+  { method: 'DELETE', collection: false, label: '删除', param: 'id' },
+];
+
+/**
+ * 由当前填写的方法/路径/名称推导配套 CRUD 路由（一键创建用）：
+ * 集合路径取自路径去参数段；与主路由 method+path 相同的规格被排除（主路由本身即该操作）。
+ * 名称在主名称后追加「·标签」，如 待办·列表。
+ */
+export function buildCompanionRoutes(routePath: string, method: string, baseName: string): Array<{ method: string; path: string; name: string; label: string }> {
+  const collectionPath = `/${crudCollectionKey(routePath)}`;
+  const name = baseName.trim() || 'CRUD';
+  return COMPANION_ROUTE_SPECS.map((spec) => ({
+    method: spec.method,
+    path: spec.collection ? collectionPath : `${collectionPath}/:${spec.param}`,
+    name: `${name}·${spec.label}`,
+    label: spec.label,
+  })).filter((companion) => !(companion.method === method && companion.path === routePath));
 }
 
 /* ---------- 接口编辑抽屉宽度 ---------- */

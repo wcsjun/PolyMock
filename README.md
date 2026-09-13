@@ -114,8 +114,9 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 - **全局场景集**：设置 `activeVariant` 后，所有拥有同名变体的接口强制命中该变体（绕过其条件），一键切换全局场景
 - **动态响应模板**：响应体字符串中支持 `{{query.x}}`、`{{header.x}}`、`{{body.x}}`（点路径）、`{{params.x}}`（路径参数）、`{{$id}}`（路由级自增）、`{{$now}}`（ISO 时间）、`{{$int(a,b)}}`（闭区间随机整数），以及内置假数据 `{{$name}}` `{{$ename}}` `{{$email}}` `{{$phone}}` `{{$city}}` `{{$word}}` `{{$bool}}`；取不到值的占位符原样保留
 - **自定义响应头**：默认响应、每个变体与序列每步均可附加自定义响应头；值支持模板占位符（如 `Location: /api/users/{{params.id}}`、`X-Request-Id: {{$id}}`）；同名多条按多值头返回（如多个 Set-Cookie）；在 `contentType` 字段之后应用，同名 Content-Type 覆盖之；`content-length` / `transfer-encoding` 等受管头注册时拒绝（400）
+- **非 JSON 文本响应**：生效 Content-Type（自定义头 `Content-Type` 优先于 `contentType` 字段）为非 JSON（如 `text/html`、`text/plain`、`application/xml`）时，body 按原样文本存储与发送、不再强制 JSON 校验，模板占位符照常渲染（值按文本注入）；未声明或 JSON 类 Content-Type 仍按 JSON 严格校验。请求日志「保存为接口」据此自动选择模式，文本上游响应可直接落为 Mock 接口
 - **延迟/抖动/故障注入**：`delayMs`（0-60000 固定延迟）+ `jitterMs`（随机抖动上限），`failureRate`（0-100%）按概率返回 500
-- **格式化与即时校验**：body 一键格式化，失焦即时校验 JSON 并标红，提交时后端再次校验
+- **格式化与即时校验**：body 一键格式化，JSON 模式下失焦即时校验并标红（声明非 JSON Content-Type 时跳过校验），提交时后端再次校验
 
 响应解析优先级：路由级认证（401）→ `requireMatch` 准入门槛 → 序列响应 → 全局场景集 → 条件变体 → 默认响应。
 
@@ -126,13 +127,15 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 - **集合路由**（路径无参数段）：`GET` 返回全部资源，`POST` 创建（无 `id` 时自动生成 `rec-N`）
 - **条目路由**（路径含 `:id` 参数段）：`GET` 查单条（不存在返回 404）、`PUT`/`PATCH` 浅合并（保留原 id）、`DELETE` 删除
 - 仅支持 GET/POST/PUT/PATCH/DELETE，其余方法返回 405
+- **按服务隔离**：存储键为 `serviceId` + 去掉参数段后的集合路径，同服务同形状的集合/条目路由共享一份数据，不同服务同形状路径互不可见
+- **存储可视化**：`GET /__polymock/crud` 查看各服务集合的资源明细，`DELETE /__polymock/crud`（可选 `?serviceId=&collection=` 过滤）清空；Web 控制台的集合分组卡片内可直接查看与清空
 
 ### 调试
 
 - **请求日志**：环形缓冲 500 条，记录方法/路径/query/body 摘要/状态码/耗时，并标注命中的接口与变体（或代理穿透、失败原因）
 - **实时推送**：通过 SSE（`/__polymock/events`）实时推送新日志，连接不可用时自动回落 2 秒轮询
 - **过滤与重放**：按状态码（2xx/4xx/5xx）、服务、路径关键字过滤；GET 记录可一键重放，任意记录可复制 curl
-- **保存为接口**：代理穿透的响应原文可一键保存为 Mock 接口，实现「抓一次、长期 Mock」
+- **保存为接口**：代理穿透的响应原文可一键保存为 Mock 接口，实现「抓一次、长期 Mock」；JSON 上游格式化存储，文本上游按原 Content-Type 与原文保存
 
 ### 代理穿透
 
@@ -155,7 +158,7 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 
 | 视图 | 说明 |
 | --- | --- |
-| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态）与接口卡片（方法色标、条件摘要、变体列表）；抽屉式表单编辑接口的条件、变体、序列响应、延迟/抖动/故障注入、CRUD 开关；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
+| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态，头部徽标快捷设置代理穿透）与接口卡片（方法色标、条件摘要、变体列表）；CRUD 路由按集合分组展示（组头可弹窗查看集合数据、整集合删除）；抽屉式表单编辑接口的条件、变体、序列响应、延迟/抖动/故障注入、CRUD 开关（开启后可一键创建配套的列表/创建/详情/更新/删除路由）；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
 | **嵌入测试** | 输入任意页面地址，将其嵌入可拖拽调整宽高的 iframe 容器中（右/下/右下边缘拖拽、一键铺满、新标签页打开），便于在控制台内直接验证页面与 Mock 的联调效果 |
 | **请求日志** | 日志列表与过滤（状态/服务/路径关键字），实时（SSE）/轮询模式徽标，支持重放、复制 curl、清空、把代理条目保存为接口 |
 
@@ -179,6 +182,8 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 | DELETE | `/__polymock/requests` | 清空请求日志 |
 | GET | `/__polymock/settings` | 读取全局设置（当前仅 `activeVariant`） |
 | PUT | `/__polymock/settings` | 更新全局设置，body `{ activeVariant }`（空串视为清除） |
+| GET | `/__polymock/crud` | 查看有状态 CRUD 集合存储：`{ collections: [{ serviceId, collection, count, records }] }`（内存态，重启即清） |
+| DELETE | `/__polymock/crud` | 清空 CRUD 集合存储；可选 `?serviceId=&collection=` 过滤（可单独或组合指定），返回清理的资源条数 `cleared` |
 | GET | `/__polymock/events` | SSE 实时推送请求日志（`event: log`，data 为日志条目 JSON） |
 
 > 设置 `POLYMOCK_ADMIN_TOKEN` 后，以上接口均需携带 `x-polymock-token` 请求头或 `?token=` 查询参数，否则 401。
@@ -229,7 +234,7 @@ docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
 | `version` | schema 版本，当前为 `2` |
 | `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；路径模式下非默认服务改由 `basePath` 前缀承载（`port` 不使用，置 `0`）；**`default` 服务的 `port` 即主端口，改后重启生效** |
 | `routes[].method` / `path` | HTTP 方法与路径，path 支持 `:param` 参数段 |
-| `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body` |
+| `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body`；body 在 JSON 模式严格校验，生效 Content-Type 为非 JSON 时为原样文本 |
 | `routes[].request` / `requireMatch` | 预期请求条件与准入开关 |
 | `routes[].variants[]` | 响应变体：`name` / `match?`（缺省=总是命中）/ `response` |
 | `routes[].sequence[]` | 序列响应：`{ status, body, headers? }` 数组，循环返回 |
