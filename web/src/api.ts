@@ -1,4 +1,4 @@
-import type { MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo } from './types';
+import type { CrudCollectionStore, MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo } from './types';
 
 /** 管理令牌（可选）：后端设置 POLYMOCK_ADMIN_TOKEN 后，所有管理请求需携带该令牌 */
 export function getAdminToken(): string {
@@ -144,4 +144,19 @@ export function updateSettings(patch: MockSettings): Promise<OkEnvelope> {
     headers: JSON_HEADERS,
     body: JSON.stringify(patch),
   });
+}
+
+/* ---------- 有状态 CRUD 存储（内存态） ---------- */
+
+export function fetchCrudStores(): Promise<{ ok: true; collections: CrudCollectionStore[] }> {
+  return api('/__polymock/crud');
+}
+
+/** 清空 CRUD 集合存储；serviceId / collection 均缺省时清空全部，返回清理的资源条数 */
+export function clearCrudStore(params?: { serviceId?: string; collection?: string }): Promise<{ ok: true; cleared: number }> {
+  const query = new URLSearchParams();
+  if (params?.serviceId) query.set('serviceId', params.serviceId);
+  if (params?.collection) query.set('collection', params.collection);
+  const qs = query.toString();
+  return api(`/__polymock/crud${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
 }
