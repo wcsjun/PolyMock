@@ -115,7 +115,8 @@ Differences in path mode:
 - **Dynamic response templates**: inside string values of the response body, use `{{query.x}}`, `{{header.x}}`, `{{body.x}}` (dot path), `{{params.x}}` (path parameters), `{{$id}}` (per-route auto increment), `{{$now}}` (ISO timestamp), `{{$int(a,b)}}` (random integer, inclusive), plus built-in fake data: `{{$name}}` `{{$ename}}` `{{$email}}` `{{$phone}}` `{{$city}}` `{{$word}}` `{{$bool}}`. Unresolvable placeholders are left as-is
 - **Custom response headers**: the default response, every variant, and each sequence step can attach custom headers; values support template placeholders (e.g. `Location: /api/users/{{params.id}}`, `X-Request-Id: {{$id}}`); repeated names are sent as multi-value headers (e.g. multiple Set-Cookie); applied after the `contentType` field — a same-named Content-Type header overrides it; managed headers such as `content-length` / `transfer-encoding` are rejected at registration (400)
 - **Delay / jitter / fault injection**: `delayMs` (0-60000 fixed delay) + `jitterMs` (random jitter cap), and `failureRate` (0-100%) to return 500 with some probability
-- **Formatting and instant validation**: one-click body formatting, on-blur JSON validation with inline error highlight, and a second server-side validation on submit
+- **Non-JSON text responses**: when the effective Content-Type (custom `Content-Type` header takes precedence over the `contentType` field) is non-JSON (e.g. `text/html`, `text/plain`, `application/xml`), the body is stored and sent verbatim as text — no JSON validation — with template placeholders still rendered (values injected as plain text); an unset or JSON Content-Type keeps the strict JSON validation. "Save as route" in the request log picks the mode automatically, so text upstream responses can be captured as mock routes directly
+- **Formatting and instant validation**: one-click body formatting, on-blur JSON validation with inline error highlight in JSON mode (skipped when a non-JSON Content-Type is declared), and a second server-side validation on submit
 
 Response resolution order: route-level auth (401) → `requireMatch` gate → sequence response → global scene set → conditional variants → default response.
 
@@ -126,13 +127,15 @@ Routes with `crud` enabled respond with resource semantics (in-memory only, rese
 - **Collection routes** (no parameter segment): `GET` returns all resources, `POST` creates one (auto-generating an `rec-N` id when absent)
 - **Item routes** (path contains an `:id` segment): `GET` fetches one (404 when missing), `PUT`/`PATCH` shallow-merges (keeping the original id), `DELETE` removes
 - Only GET/POST/PUT/PATCH/DELETE are supported; other methods return 405
+- **Per-service isolation**: the store key is `serviceId` + the path with parameter segments stripped — collection/item routes of the same shape within one service share one store, while identically shaped paths across services stay isolated
+- **Store visibility**: `GET /__polymock/crud` inspects every service's collections with their records, `DELETE /__polymock/crud` (optionally `?serviceId=&collection=`) clears them; the web console exposes both on each CRUD collection group, along with one-click creation of the companion list/create/detail/update/delete routes
 
 ### Debugging
 
 - **Request log**: a 500-entry ring buffer recording method/path/query/body preview/status/duration, annotated with the matched route and variant (or the proxy pass-through and failure reason)
 - **Live updates**: new entries are pushed over SSE (`/__polymock/events`); when the connection is unavailable the panel automatically falls back to 2-second polling
 - **Filter and replay**: filter by status class (2xx/4xx/5xx), service, or path keyword; GET entries can be replayed with one click, and any entry can be copied as curl
-- **Save as route**: a proxied response body can be saved as a mock route in one click — capture once, mock forever
+- **Save as route**: a proxied response body can be saved as a mock route in one click — capture once, mock forever; JSON upstreams are stored formatted, text upstreams keep their content type and verbatim body
 
 ### Proxy pass-through
 
@@ -155,7 +158,7 @@ Open <http://localhost:33233> in a browser and switch between three views in the
 
 | View | Description |
 | --- | --- |
-| **Routes** | Service groups (create/delete, port, basePath, running status) and route cards (method color, condition summary, variant list); a drawer form edits conditions, variants, sequence responses, delay/jitter/fault injection, and the CRUD switch; the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
+| **Routes** | Service groups (create/delete, port, basePath, running status, a header chip to set proxy pass-through) and route cards (method color, condition summary, variant list, effective response Content-Type); CRUD routes are grouped by collection (the group header opens a data modal and deletes the whole collection); a drawer form edits conditions, variants, sequence responses, delay/jitter/fault injection, and the CRUD switch (when enabled, companion list/create/detail/update/delete routes can be created in one click); the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
 | **Embed test** | Load any page URL into a resizable iframe container (drag the right/bottom/bottom-right edges, fill the stage, open in a new tab) to verify your page against the mocks without leaving the console |
 | **Request log** | Log list with filters (status/service/path keyword), a live (SSE) / polling badge, and actions to replay, copy curl, clear, or save a proxied entry as a route |
 
@@ -179,6 +182,8 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 | DELETE | `/__polymock/requests` | Clear the request log |
 | GET | `/__polymock/settings` | Read global settings (currently `activeVariant`) |
 | PUT | `/__polymock/settings` | Update global settings, body `{ activeVariant }` (empty string clears it) |
+| GET | `/__polymock/crud` | Inspect stateful CRUD collection stores: `{ collections: [{ serviceId, collection, count, records }] }` (in-memory, reset on restart) |
+| DELETE | `/__polymock/crud` | Clear CRUD collection stores; optional `?serviceId=&collection=` filters (individually or combined), returns the number of cleared records as `cleared` |
 | GET | `/__polymock/events` | SSE stream of request logs (`event: log`, data is the entry JSON) |
 
 > When `POLYMOCK_ADMIN_TOKEN` is set, all of the above require the `x-polymock-token` header or a `?token=` query parameter, otherwise 401.
@@ -229,7 +234,7 @@ Key fields:
 | `version` | Schema version, currently `2` |
 | `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; in path mode non-default services are hosted by their `basePath` prefix instead (`port` unused, set to `0`); **the `default` service's `port` is the main port — edit it and restart to take effect** |
 | `routes[].method` / `path` | HTTP method and path; paths support `:param` segments |
-| `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body` |
+| `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body`; the body is strictly validated in JSON mode and stored verbatim as text when the effective Content-Type is non-JSON |
 | `routes[].request` / `requireMatch` | Expected request conditions and the admission gate |
 | `routes[].variants[]` | Response variants: `name` / `match?` (omitted = always matches) / `response` |
 | `routes[].sequence[]` | Sequence responses: `{ status, body, headers? }` entries, returned cyclically |
