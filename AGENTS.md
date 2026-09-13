@@ -5,7 +5,7 @@
 
 ## 项目概览
 
-- 技术栈：Node.js 18+ / TypeScript（NodeNext）/ Express 5 / Vitest；前端为 Vue 3 + Vite（源码在 `web/`）
+- 技术栈：Node.js 22.13+（与 `package.json` 的 `engines` 一致）/ TypeScript（NodeNext）/ Express 5 / Vitest；前端为 Vue 3 + Vite（源码在 `web/`）
 - 包管理器：**pnpm**（锁定文件为 `pnpm-lock.yaml`）
 - 入口：`src/index.ts`；构建产物输出到 `dist/`
 - 关键行为：管理 API 挂载在 `/__polymock`；Mock 请求按 `(serviceId, method, path)` 在注册表查找响应

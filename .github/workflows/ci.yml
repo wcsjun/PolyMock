@@ -39,3 +39,34 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 版本不写死，读取 package.json 的 packageManager 字段
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # E2E 用真实 Chromium；--with-deps 同时装齐 Ubuntu 系统依赖
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # E2E 走构建产物（webServer 拉起 dist/index.js），先构建
+      - name: Build
+        run: pnpm build
+
+      - name: Run E2E
+        run: pnpm test:e2e
