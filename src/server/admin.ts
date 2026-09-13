@@ -29,6 +29,8 @@ export interface AdminOptions {
   proxyAllowHosts?: string[];
   /** 运行模式：path 时创建服务免端口、按 basePath 前缀区分；缺省 port */
   mode?: PolyMockMode;
+  /** 有状态 CRUD 共享存储（key = serviceId\0集合路径）：/crud 端点查看与清空；缺省时返回空列表 */
+  crudStores?: Map<string, Map<string, Record<string, unknown>>>;
 }
 
 /** 请求日志查询的缺省与上限条数 */
@@ -98,9 +100,33 @@ function parseRouteRequest(raw: unknown): ParseResult<RouteRequest> {
   return { ok: true, value: result };
 }
 
-/** 解析响应体：字符串按 JSON 解析，其余透传；含模板占位符的文本按「占位符替换为 null」容忍校验，原样存储由渲染层处理 */
-function parseResponseBody(raw: unknown, label: string): ParseResult<unknown> {
-  if (typeof raw !== 'string') return { ok: true, value: raw };
+/** JSON 类 Content-Type 判定：未声明按 JSON 处理（缺省行为不变）；application/json、text/json、*+json 视为 JSON（忽略参数与大小写） */
+export function isJsonContentType(contentType: string | undefined): boolean {
+  if (!contentType) return true;
+  const mediaType = contentType.split(';', 1)[0].trim().toLowerCase();
+  return mediaType === 'application/json' || mediaType === 'text/json' || mediaType.endsWith('+json');
+}
+
+/** 响应的生效 Content-Type：自定义响应头中的 Content-Type 优先于 contentType 字段；对未经校验的原始输入保持容错 */
+export function effectiveResponseContentType(response: { contentType?: unknown; headers?: unknown } | undefined): string | undefined {
+  const headers = Array.isArray(response?.headers) ? (response?.headers as unknown[]) : [];
+  const headerCt = headers
+    .filter((h): h is Record<string, unknown> => h !== null && typeof h === 'object')
+    .find((h) => typeof h.key === 'string' && h.key.trim().toLowerCase() === 'content-type')
+    ?.value;
+  const headerText = typeof headerCt === 'string' ? headerCt.trim() : '';
+  const fieldText = typeof response?.contentType === 'string' ? response.contentType.trim() : '';
+  return headerText || fieldText || undefined;
+}
+
+/** 解析响应体：JSON 模式（缺省）字符串按 JSON 解析、其余透传，含模板占位符的文本按「占位符替换为 null」容忍校验；文本模式（生效 Content-Type 非 JSON）要求字符串并原样存储 */
+function parseResponseBody(raw: unknown, label: string, jsonMode: boolean): ParseResult<unknown> {
+  if (typeof raw !== 'string') {
+    return jsonMode
+      ? { ok: true, value: raw }
+      : { ok: false, error: `${label} 的生效 Content-Type 为非 JSON 类型，body 需为文本字符串` };
+  }
+  if (!jsonMode) return { ok: true, value: raw };
   try {
     return { ok: true, value: JSON.parse(raw) };
   } catch {
@@ -168,7 +194,7 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
       match = parsed.value;
     }
     let body: unknown = item.response?.body;
-    const bodyParsed = parseResponseBody(body, `变体「${name.trim()}」`);
+    const bodyParsed = parseResponseBody(body, `变体「${name.trim()}」`, isJsonContentType(effectiveResponseContentType(item.response)));
     if (!bodyParsed.ok) return bodyParsed;
     body = bodyParsed.value;
     const headersParsed = parseResponseHeaders(item.response?.headers, `变体「${name.trim()}」`);
@@ -271,7 +297,8 @@ function parseSequence(raw: unknown): ParseResult<Array<{ status: number; body: 
     if (!Number.isInteger(status) || (status as number) < 100 || (status as number) > 599) {
       return { ok: false, error: `sequence[${index}] 的 status 需为 100-599 的整数` };
     }
-    const bodyParsed = parseResponseBody((item as { body?: unknown }).body, `sequence[${index}]`);
+    const stepJsonMode = isJsonContentType(effectiveResponseContentType({ headers: (item as { headers?: unknown }).headers }));
+    const bodyParsed = parseResponseBody((item as { body?: unknown }).body, `sequence[${index}]`, stepJsonMode);
     if (!bodyParsed.ok) return bodyParsed;
     const headersParsed = parseResponseHeaders((item as { headers?: unknown }).headers, `sequence[${index}]`);
     if (!headersParsed.ok) return headersParsed;
@@ -533,6 +560,31 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     res.json({ ok: true, settings: registry.getSettings() });
   });
 
+  // ---- 有状态 CRUD 存储（内存态，重启即清）：查看与清空 ----
+  router.get('/crud', (_req, res) => {
+    const collections: Array<{ serviceId: string; collection: string; count: number; records: Record<string, unknown>[] }> = [];
+    for (const [key, resources] of options.crudStores ?? []) {
+      const sep = key.indexOf('\0');
+      collections.push({ serviceId: key.slice(0, sep), collection: key.slice(sep + 1), count: resources.size, records: [...resources.values()] });
+    }
+    res.json({ ok: true, collections });
+  });
+
+  /* 按查询参数过滤清空：serviceId / collection 均可单独或组合指定，均缺省时清空全部；返回清理的资源条数 */
+  router.delete('/crud', (req, res) => {
+    const serviceId = typeof req.query.serviceId === 'string' && req.query.serviceId ? req.query.serviceId : undefined;
+    const collection = typeof req.query.collection === 'string' && req.query.collection ? req.query.collection : undefined;
+    let cleared = 0;
+    for (const [key, resources] of options.crudStores ?? []) {
+      const sep = key.indexOf('\0');
+      if (serviceId !== undefined && key.slice(0, sep) !== serviceId) continue;
+      if (collection !== undefined && key.slice(sep + 1) !== collection) continue;
+      cleared += resources.size;
+      resources.clear();
+    }
+    res.json({ ok: true, cleared });
+  });
+
   // ---- 管理 API（接口注册）----
   router.get('/routes', (req, res) => {
     const serviceId = typeof req.query.serviceId === 'string' ? req.query.serviceId : undefined;
@@ -606,7 +658,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       routeAuth = parsed.value;
     }
 
-    const bodyParsed = parseResponseBody(response?.body, 'response');
+    const bodyParsed = parseResponseBody(response?.body, 'response', isJsonContentType(effectiveResponseContentType(response)));
     if (!bodyParsed.ok) {
       res.status(400).json({ ok: false, error: bodyParsed.error });
       return;
@@ -703,7 +755,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       patch.path = routePath;
     }
     if (response !== undefined) {
-      const bodyParsed = parseResponseBody(response?.body, 'response');
+      const bodyParsed = parseResponseBody(response?.body, 'response', isJsonContentType(effectiveResponseContentType(response)));
       if (!bodyParsed.ok) {
         res.status(400).json({ ok: false, error: bodyParsed.error });
         return;

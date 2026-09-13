@@ -118,8 +118,8 @@ function resolveExpr(expr: string, ctx: TemplateContext): string | undefined {
   return undefined;
 }
 
-/** 替换字符串中的全部占位符；无法解析的保持原样 */
-function renderString(text: string, ctx: TemplateContext): string {
+/** 替换字符串中的全部占位符，值按文本原样注入（非 JSON 文本响应用）；无法解析的保持原样 */
+export function renderString(text: string, ctx: TemplateContext): string {
   return text.replace(/\{\{([^{}]+)\}\}/g, (match, raw: string) => {
     const resolved = resolveExpr(raw.trim(), ctx);
     return resolved === undefined ? match : resolved;

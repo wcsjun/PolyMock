@@ -169,4 +169,6 @@ export interface RequestLogEntry {
   proxyStatus?: number;
   /** 上游响应体预览（截断，代理时） */
   proxyBody?: string;
+  /** 上游响应 Content-Type（代理时），「保存为接口」据此判定 JSON/文本模式 */
+  proxyContentType?: string;
 }
