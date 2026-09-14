@@ -142,11 +142,19 @@ watch(
   { immediate: true },
 );
 
+/** 正在编辑 basePath 的服务 id：由头部前缀徽标唤出，就地显示在服务头部下方 */
+const basePathEditing = ref<string | null>(null);
+
+function toggleBasePathRow(serviceId: string) {
+  basePathEditing.value = basePathEditing.value === serviceId ? null : serviceId;
+}
+
 async function saveBasePath(svc: ServiceInfo) {
   const basePath = (basePathDrafts[svc.id] ?? '').trim();
   try {
     await updateServiceBasePath(svc.id, basePath);
     props.notify(`已更新「${svc.name}」的 basePath → /${basePath}`);
+    basePathEditing.value = null;
     emit('changed');
   } catch (err) {
     props.notify((err as Error).message, 'err');
@@ -215,8 +223,8 @@ async function saveProxy(svc: ServiceInfo) {
                 <span class="service-name" :title="svc.name">{{ svc.name }}</span>
                 <span v-if="svc.isDefault" class="service-tag">默认</span>
               </span>
-              <span v-if="mode === 'path'" class="service-port" :title="svc.isDefault ? '默认服务占用主端口根路径，接口无需前缀' : `路径模式前缀 /${svc.basePath ?? ''}`">{{ svc.isDefault ? '/' : `/${svc.basePath}` }}</span>
-              <span v-else class="service-port">:{{ svc.port }}</span>
+              <span v-if="mode === 'path' && svc.isDefault" class="service-port" title="默认服务占用主端口根路径，接口无需前缀">/</span>
+              <span v-else-if="mode !== 'path'" class="service-port">:{{ svc.port }}</span>
             </span>
             <span class="service-meta">
               <span
@@ -227,6 +235,14 @@ async function saveProxy(svc: ServiceInfo) {
               <span>{{ routesOf(svc.id).length }} 个接口</span>
             </span>
           </button>
+          <button
+            v-if="mode === 'path' && !svc.isDefault"
+            type="button"
+            class="proxy-chip"
+            :class="{ on: basePathEditing === svc.id }"
+            :title="`路径前缀 /${svc.basePath ?? ''}（点击修改）`"
+            @click="toggleBasePathRow(svc.id)"
+          >/{{ svc.basePath }}</button>
           <button
             type="button"
             class="proxy-chip"
@@ -257,6 +273,19 @@ async function saveProxy(svc: ServiceInfo) {
           >
           <button type="button" class="proxy-save" title="保存代理穿透配置" @click="saveProxy(svc)">保存</button>
           <button type="button" class="proxy-save" title="收起编辑行" @click="toggleProxyRow(svc.id)">收起</button>
+        </div>
+        <!-- basePath 就地编辑：由头部前缀徽标唤出，与代理编辑行同款布局 -->
+        <div v-if="basePathEditing === svc.id" class="proxy-edit">
+          <input
+            v-model="basePathDrafts[svc.id]"
+            name="basePath"
+            type="text"
+            placeholder="basePath 前缀，如 order（留空恢复自动生成）"
+            spellcheck="false"
+            @keydown.enter.prevent="saveBasePath(svc)"
+          >
+          <button type="button" class="proxy-save" title="保存 basePath 前缀" @click="saveBasePath(svc)">保存</button>
+          <button type="button" class="proxy-save" title="收起编辑行" @click="toggleBasePathRow(svc.id)">收起</button>
         </div>
         <div v-if="expanded.has(svc.id)" class="service-routes">
           <p v-if="routesOf(svc.id).length === 0" class="service-empty">该服务下还没有接口，点击上方「＋ 新增接口」添加</p>
@@ -324,17 +353,6 @@ async function saveProxy(svc: ServiceInfo) {
             @remove="emit('remove-route', $event)"
             @toggle-disable="emit('toggle-disable', $event)"
           />
-        </div>
-        <div v-if="expanded.has(svc.id) && mode === 'path' && !svc.isDefault" class="service-proxy">
-          <input
-            v-model="basePathDrafts[svc.id]"
-            name="basePath"
-            type="text"
-            placeholder="basePath 前缀，如 order（留空恢复自动生成）"
-            spellcheck="false"
-            @keydown.enter.prevent="saveBasePath(svc)"
-          >
-          <button type="button" class="proxy-save" title="保存 basePath 前缀" @click="saveBasePath(svc)">保存</button>
         </div>
       </div>
     </div>
@@ -513,21 +531,6 @@ async function saveProxy(svc: ServiceInfo) {
 .crud-group-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-/* 展开卡片内的代理穿透配置行，视觉对齐 .service-form */
-.service-proxy {
-  display: flex;
-  gap: 8px;
-  padding: 10px 12px 12px;
-  border-top: 1px dashed var(--line);
-}
-
-.service-proxy input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 10px;
-  font-size: 12px;
 }
 
 .proxy-save {
