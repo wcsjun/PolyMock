@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { CONFIG_FILE_NAME } from './args.js';
 import { SCHEMA_VERSION, type PersistedState } from './types.js';
 
 const EMPTY: PersistedState = { version: SCHEMA_VERSION, services: [], routes: [] };
@@ -48,7 +49,15 @@ export function loadState(filePath: string): PersistedState {
 
 export function saveState(filePath: string, state: PersistedState): void {
   try {
-    fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
+    const resolved = path.resolve(filePath);
+    /* 预检：目标路径是已存在的目录时，rename 落盘必然失败（Windows 报 EPERM），提前给出可操作提示 */
+    if (fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory()) {
+      console.error(
+        `[PolyMock] 配置保存失败（${filePath}）: 配置路径指向已存在的目录，请指定含文件名的完整路径（例如 ${path.join(resolved, CONFIG_FILE_NAME)}）`,
+      );
+      return;
+    }
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
     const tmp = `${filePath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
     fs.renameSync(tmp, filePath);

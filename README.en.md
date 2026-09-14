@@ -29,6 +29,9 @@ Or run it once without installing:
 
 ```bash
 npx @wcsjun/polymock
+
+# specify the config file path (also available via the POLYMOCK_CONFIG_FILE env var, see "Configuration File")
+npx @wcsjun/polymock --config ./mock/polymock.config.json
 ```
 
 Alternatively, run from source (useful for development):
@@ -209,7 +212,16 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 
 ## Configuration File
 
-Configuration is persisted to `polymock.config.json` (path configurable via `POLYMOCK_CONFIG_FILE`) and saved automatically on every registry change (atomic write: temp file + rename). The `port` field of the `default` service is the main port (home of the web UI, admin API, and the default service). The current schema version is `2`:
+Configuration is persisted to `polymock.config.json` and saved automatically on every registry change (atomic write: temp file + rename). The config file path is resolved with the following precedence:
+
+1. `--config <path>` CLI argument (also supports `--config=<path>`)
+2. `POLYMOCK_CONFIG_FILE` environment variable (the Docker image pins it to the `/data` volume this way)
+3. An existing `polymock.config.json` in the current working directory (reused, keeping project-local configs compatible)
+4. `~/.config/polymock/polymock.config.json` (fallback created on demand, avoiding polluting the working directory when run bare from the home directory)
+
+> Explicit path tolerance: a path pointing to an existing directory (or ending with `\` / `/`) automatically uses `polymock.config.json` inside it; a file path must end with `.json`, otherwise startup exits with an error.
+
+The `port` field of the `default` service is the main port (home of the web UI, admin API, and the default service). The current schema version is `2`:
 
 ```json
 {
@@ -269,7 +281,7 @@ Older configuration files (missing `version` or `version: 1`) are migrated autom
 | `POLYMOCK_MODE` | `port` | Run mode: `port` = independent ports per service; `path` = all services dispatched from the main port under `/{basePath}` prefixes (the Docker image defaults to `path`); see "Run modes" |
 | `POLYMOCK_PORT` | `default` service `port` in the config file (`33233` out of the box) | Main port (home of the default service, web UI, and admin API); takes precedence over the config file and is written back to it when set explicitly |
 | `POLYMOCK_HOST` | unset (listens on all interfaces) | Listen address; a startup warning is printed when bound to a non-loopback address without an admin token |
-| `POLYMOCK_CONFIG_FILE` | `polymock.config.json` | Configuration file path |
+| `POLYMOCK_CONFIG_FILE` | unset (see the resolution order under "Configuration File") | Configuration file path; lower precedence than the `--config` CLI argument, higher than working-directory auto-detection |
 | `POLYMOCK_ADMIN_TOKEN` | unset (no auth) | Admin token; when set, every `/__polymock` endpoint requires it (an empty string counts as unset) |
 | `POLYMOCK_PROXY_ALLOW` | unset (no check) | Proxy target allowlist as a comma-separated host list (e.g. `localhost,127.0.0.1`) |
 
