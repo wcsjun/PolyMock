@@ -87,7 +87,7 @@ The image ships with path mode enabled (`POLYMOCK_MODE=path`): every service is 
 ```bash
 # Prebuilt images (built automatically by the release pipeline on every release, amd64/arm64):
 docker run -d --name polymock -p 33233:33233 -v polymock-data:/data ghcr.io/wcsjun/polymock
-# Or Docker Hub: docker run -d --name polymock -p 33233:33233 -v polymock-data:/data wcsjun/polymock
+# Or Docker Hub: docker run -d --name polymock -p 33233:33233 -v polymock-data:/data jun82315/polymock
 
 # Local build:
 docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
@@ -312,7 +312,7 @@ Test coverage by area:
 
 The repository uses GitHub Actions (`.github/workflows/ci.yml`): on every push (to `main` and `feat/**` branches) and on all pull requests it runs two jobs — `CI` (`pnpm typecheck`, `pnpm typecheck:web`, `pnpm test`, `pnpm build`) and `E2E` (installs the Playwright Chromium browser, builds, and runs `pnpm test:e2e`). It uses Node 22, reads the pnpm version from the `packageManager` field in `package.json`, and installs with `--frozen-lockfile`.
 
-Releases run on a dedicated pipeline (`.github/workflows/release.yml`): pushing a `v*` tag automatically runs "tag/version consistency check → typecheck/test/build gate → npm publish (`@wcsjun/polymock`, with provenance) → multi-arch Docker image push (GHCR + Docker Hub, with `latest` and major.minor tags) → GitHub Release creation (notes extracted from `CHANGELOG.md`)". Before releasing, configure the repository secrets `NPM_TOKEN` (an npm automation token), `DOCKERHUB_USERNAME`, and `DOCKERHUB_TOKEN`.
+Releases run on a dedicated pipeline (`.github/workflows/release.yml`): pushing a `v*` tag automatically runs "tag/version consistency check → typecheck/test/build gate → npm publish (`@wcsjun/polymock`, with provenance) → multi-arch Docker image push (GHCR + Docker Hub, with `latest` and major.minor tags) → GitHub Release creation (notes extracted from `CHANGELOG.md`)". Before releasing, configure the repository secrets `NPM_TOKEN` (a Granular Access Token with **Bypass 2FA** enabled — classic/automation tokens are no longer issued), `DOCKERHUB_USERNAME`, and `DOCKERHUB_TOKEN`.
 
 ## Roadmap
 

@@ -145,8 +145,10 @@ jobs:
 
       # 从 CHANGELOG.md 提取当前版本段落作为 Release 说明；未命中时回退为简短说明。
       # 用 indexOf 定位而非正则：避免正则反斜杠在 YAML/bash/JS 多层转义中的歧义
+      # 截断点取「下一个版本段落」与「本版本的链接定义行」中靠前者：CHANGELOG 只含一段
+      # 版本时前者不存在（indexOf 返回 -1），不做这层兜底会把末尾的 [x.y.z]: https://... 带进正文
       - name: Extract changelog for this version
-        run: node -e 'const fs=require("fs");const version=process.env.GITHUB_REF_NAME.slice(1);const md=fs.readFileSync("CHANGELOG.md","utf8");const start=md.indexOf("## ["+version+"]");let body="PolyMock v"+version;if(start!==-1){const from=md.indexOf("\n",start)+1;let end=md.indexOf("\n## [",from);if(end===-1)end=md.length;body=md.slice(from,end).trim();}fs.writeFileSync("release-body.md",body);'
+        run: node -e 'const fs=require("fs");const version=process.env.GITHUB_REF_NAME.slice(1);const md=fs.readFileSync("CHANGELOG.md","utf8");const start=md.indexOf("## ["+version+"]");let body="PolyMock v"+version;if(start!==-1){const from=md.indexOf("\n",start)+1;const cuts=["\n## [","\n["+version+"]:"].map(s=>md.indexOf(s,from)).filter(i=>i!==-1);const end=cuts.length?Math.min(...cuts):md.length;body=md.slice(from,end).trim();}fs.writeFileSync("release-body.md",body);'
 
       - name: Create release
         uses: softprops/action-gh-release@v2

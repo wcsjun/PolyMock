@@ -2,6 +2,27 @@
   "name": "@wcsjun/polymock",
   "version": "0.1.0",
   "description": "A local mock server with dynamic runtime route registration — mock internal APIs during local development without switching networks.",
+  "keywords": [
+    "mock",
+    "mock-server",
+    "http-mock",
+    "api-mocking",
+    "stub",
+    "proxy",
+    "express",
+    "openapi",
+    "development",
+    "testing"
+  ],
+  "homepage": "https://github.com/wcsjun/PolyMock#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wcsjun/PolyMock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wcsjun/PolyMock/issues"
+  },
+  "author": "wcsjun",
   "main": "dist/index.js",
   "type": "module",
   "packageManager": "pnpm@11.22.0",

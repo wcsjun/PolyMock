@@ -87,7 +87,7 @@ curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"ro
 ```bash
 # 预构建镜像（每次发版由流水线自动构建，amd64/arm64 双架构）：
 docker run -d --name polymock -p 33233:33233 -v polymock-data:/data ghcr.io/wcsjun/polymock
-# 或 Docker Hub：docker run -d --name polymock -p 33233:33233 -v polymock-data:/data wcsjun/polymock
+# 或 Docker Hub：docker run -d --name polymock -p 33233:33233 -v polymock-data:/data jun82315/polymock
 
 # 本地构建：
 docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v polymock-data:/data polymock
@@ -312,7 +312,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 仓库使用 GitHub Actions（`.github/workflows/ci.yml`）：在 push（`main` 与 `feat/**` 分支）和所有 Pull Request 上执行两个 job——`CI`（`pnpm typecheck`、`pnpm typecheck:web`、`pnpm test`、`pnpm build`）与 `E2E`（安装 Playwright Chromium 后构建并运行 `pnpm test:e2e`）。Node 22，pnpm 版本读取 `package.json` 的 `packageManager` 字段，安装使用 `--frozen-lockfile`。
 
-发布走独立流水线（`.github/workflows/release.yml`）：推送 `v*` tag 后自动执行「tag 与 package.json 版本校验 → typecheck/test/build 门禁 → npm 发布（`@wcsjun/polymock`，含 provenance）→ Docker 多架构镜像推送（GHCR + Docker Hub，含 `latest` 与主次版本 tag）→ 创建 GitHub Release（说明提取自 `CHANGELOG.md`）」。发版前需在仓库 Secrets 配置 `NPM_TOKEN`（npm automation token）、`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。
+发布走独立流水线（`.github/workflows/release.yml`）：推送 `v*` tag 后自动执行「tag 与 package.json 版本校验 → typecheck/test/build 门禁 → npm 发布（`@wcsjun/polymock`，含 provenance）→ Docker 多架构镜像推送（GHCR + Docker Hub，含 `latest` 与主次版本 tag）→ 创建 GitHub Release（说明提取自 `CHANGELOG.md`）」。发版前需在仓库 Secrets 配置 `NPM_TOKEN`（Granular Access Token，须勾选 **Bypass 2FA**；classic / automation token 已下线）、`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。
 
 ## Roadmap（规划）
 
