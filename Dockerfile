@@ -2,7 +2,9 @@
 # 所有服务经主端口 /{basePath} 前缀分发，仅需暴露一个端口。
 # 配置持久化到 /data 卷（POLYMOCK_CONFIG_FILE 指向卷内文件）。
 #
-# 体积优化要点（382MB -> ~127MB）：
+# 体积优化要点（382MB -> ~87MB；口径为各层未压缩体积之和 —— Docker Desktop 的
+#   containerd 存储会另报 DISK USAGE ~119MB / CONTENT SIZE ~32MB，那是「压缩 blob +
+#   解包快照」两份都计入，与 87MB 不是同一口径，勿混用）：
 #   1) 构建阶段用官方 node 镜像（含 pnpm/corepack/tsc/vite），产物为纯 JS；
 #   2) 单独一层只装生产依赖（--prod 自动排除 vue/vite/typescript/playwright 等
 #      开发依赖——前端已由 vite 打包进 public/，运行时只需 express 依赖树）；

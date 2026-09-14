@@ -20,7 +20,8 @@
 - **Web 控制台**：服务分组与状态、接口卡片、抽屉式编辑（可拖拽调宽）、嵌入测试、OpenAPI 导入、CRUD 集合分组与数据弹窗、一键创建配套 CRUD 路由
 - **管理 API**：`/__polymock/*` 全套端点，可选 `POLYMOCK_ADMIN_TOKEN` 鉴权，附 OpenAPI 契约与 Postman 全功能回归集合
 - **Docker**：多阶段构建镜像（路径模式默认，配置持久化到 `/data` 卷）
-- **质量设施**：Vitest 196 用例（真实 HTTP 集成测试）+ Playwright E2E + Postman 回归 + CI（typecheck / test / build / e2e）
+- **质量设施**：Vitest 211 用例（真实 HTTP 集成测试）+ Playwright E2E + Postman 回归 + CI（typecheck / test / build / e2e）
 - **npm 发布**：包名 `@wcsjun/polymock`，`files` 含 `public`（Web UI 随包分发），bin 命令 `polymock`
+- **配置文件定位**：`--config <path>` 参数与 `POLYMOCK_CONFIG_FILE` 环境变量（优先级 CLI 参数 > 环境变量 > 当前目录已存在的配置 > `~/.config/polymock/` 兜底）；传入目录或路径以分隔符结尾时自动补 `polymock.config.json`，并强制 `.json` 后缀
 
 [0.1.0]: https://github.com/wcsjun/PolyMock/releases/tag/v0.1.0
