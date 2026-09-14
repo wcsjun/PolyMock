@@ -77,16 +77,28 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
+  # 双架构拆成两个「原生」runner 并行构建：amd64 跑 x64 真机，arm64 跑 GitHub 为公开仓库
+  # 免费提供的 arm64 真机（ubuntu-24.04-arm）。全程不使用 QEMU —— 曾用 QEMU 模拟 arm64，
+  # node 会因模拟器不支持其指令集而 core dump（qemu: uncaught target signal 4），
+  # 使 pnpm install 永久挂起（见 run 34867793069，15 分钟零输出后被取消）。
+  # 两个架构先各推「带 -<arch> 后缀」的标签，由 docker-manifest 合并成多架构 manifest。
   docker:
-    name: 构建 Docker 镜像
+    name: 构建 Docker 镜像 (${{ matrix.arch }})
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
@@ -112,6 +124,8 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
 
+      # latest=false 关掉自动 latest，靠下面显式的 raw 标签生成；onlatest=true 让后缀
+      # 也作用到 latest，两个架构各自得到 latest-amd64 / latest-arm64，避免并发抢写 :latest
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -119,6 +133,9 @@ jobs:
           images: |
             ${{ env.IMAGE_GHCR }}
             ${{ env.IMAGE_HUB }}
+          flavor: |
+            latest=false
+            suffix=-${{ matrix.arch }},onlatest=true
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -128,12 +145,58 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  # 把两个架构的单架构镜像合并成多架构 manifest list：docker pull 时按宿主机架构自动选择
+  docker-manifest:
+    name: 合并多架构 manifest
+    needs: docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute lowercase image names
+        run: |
+          echo "IMAGE_GHCR=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "IMAGE_HUB=docker.io/${DOCKERHUB_USERNAME,,}/polymock" >> "$GITHUB_ENV"
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+      # 这里的标签（version / major.minor / latest）必须与上面 Docker meta 的 tags 保持一致，
+      # 改一处要同步改另一处。
+      - name: Create manifest lists and push
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"   # v0.1.0 -> 0.1.0
+          MINOR="${VERSION%.*}"            # 0.1.0  -> 0.1
+          for IMG in "${IMAGE_GHCR}" "${IMAGE_HUB}"; do
+            echo "==> ${IMG} : ${VERSION} / ${MINOR} / latest"
+            docker buildx imagetools create \
+              -t "${IMG}:${VERSION}" \
+              -t "${IMG}:${MINOR}" \
+              -t "${IMG}:latest" \
+              "${IMG}:${VERSION}-amd64" \
+              "${IMG}:${VERSION}-arm64"
+          done
 
   github-release:
     name: 创建 GitHub Release
