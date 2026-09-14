@@ -29,6 +29,9 @@ polymock                    # 启动后访问 http://localhost:33233
 
 ```bash
 npx @wcsjun/polymock
+
+# 指定配置文件路径（也支持环境变量 POLYMOCK_CONFIG_FILE，详见「配置文件」）
+npx @wcsjun/polymock --config ./mock/polymock.config.json
 ```
 
 也可以从源码运行（开发场景）：
@@ -209,7 +212,16 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 ## 配置文件
 
-配置持久化在 `polymock.config.json`（路径可通过 `POLYMOCK_CONFIG_FILE` 修改），注册表每次变更自动落盘（临时文件 + rename 原子写）。其中 `default` 服务的 `port` 字段就是主端口（Web UI / 管理 API / 默认服务所在）。当前 schema 版本为 `2`：
+配置持久化在 `polymock.config.json`，注册表每次变更自动落盘（临时文件 + rename 原子写）。配置文件路径按以下优先级解析：
+
+1. `--config <path>` CLI 参数（支持 `--config=<path>` 形式）
+2. `POLYMOCK_CONFIG_FILE` 环境变量（Docker 镜像经此钉死到 `/data` 卷）
+3. 当前工作目录下已存在的 `polymock.config.json`（沿用，兼容项目内配置）
+4. `~/.config/polymock/polymock.config.json`（兜底新建，避免在主目录裸跑时污染工作目录）
+
+> 显式路径容错：指向已存在的目录（或以 `\`、`/` 结尾）时自动使用目录下 `polymock.config.json`；文件路径必须以 `.json` 结尾，否则启动即报错退出。
+
+其中 `default` 服务的 `port` 字段就是主端口（Web UI / 管理 API / 默认服务所在）。当前 schema 版本为 `2`：
 
 ```json
 {
@@ -269,7 +281,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | `POLYMOCK_MODE` | `port` | 运行模式：`port` = 各服务独立端口监听；`path` = 所有服务经主端口 `/{basePath}` 前缀分发（Docker 镜像默认 `path`），详见「运行模式」 |
 | `POLYMOCK_PORT` | 配置文件 `default` 服务 `port`（出厂 `33233`） | 主端口（默认服务与 Web UI / 管理 API 所在）；优先级高于配置文件，显式设置后会回写同步到配置 |
 | `POLYMOCK_HOST` | 未设置（监听全部网卡） | 监听地址；设置为非回环地址且未配置管理令牌时启动会输出安全警告 |
-| `POLYMOCK_CONFIG_FILE` | `polymock.config.json` | 配置文件路径 |
+| `POLYMOCK_CONFIG_FILE` | 无（见「配置文件」解析顺序） | 配置文件路径；优先级低于 `--config` CLI 参数，高于工作目录自动探测 |
 | `POLYMOCK_ADMIN_TOKEN` | 未设置（不校验） | 管理令牌，设置后 `/__polymock` 全部接口需鉴权（空串视为未设置） |
 | `POLYMOCK_PROXY_ALLOW` | 未设置（不校验） | 代理目标白名单，逗号分隔 host 列表（如 `localhost,127.0.0.1`） |
 

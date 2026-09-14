@@ -155,4 +155,20 @@ describe('saveState', () => {
     saveState(file, EMPTY);
     expect(fs.existsSync(file)).toBe(true);
   });
+
+  it('目标路径是已存在目录时给出清晰提示且不落盘', () => {
+    const dir = makeTmpDir();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => saveState(dir, EMPTY)).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledOnce();
+      const message = String(errorSpy.mock.calls[0]?.[0]);
+      expect(message).toContain('已存在的目录');
+      expect(message).toContain('polymock.config.json');
+    } finally {
+      errorSpy.mockRestore();
+    }
+    /* 预检在写临时文件之前拦截，目录内不应有任何残留 */
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
 });

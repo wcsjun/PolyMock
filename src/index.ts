@@ -3,10 +3,17 @@ import { createApp } from './server/app.js';
 import { ServiceManager } from './server/manager.js';
 import { RequestLogStore } from './server/request-log.js';
 import { RouteRegistry } from './registry.js';
+import { resolveConfigFile, validateConfigFile } from './args.js';
 import { loadState, saveState } from './store.js';
 import { DEFAULT_SERVICE_ID, resolveMainPort, resolveMode } from './types.js';
 
-const configFile = process.env.POLYMOCK_CONFIG_FILE ?? 'polymock.config.json';
+const configFile = resolveConfigFile(process.argv, process.env);
+/* 用户输入预检：非 .json 文件路径直接拒绝启动，避免运行中配置始终落不了盘 */
+const configError = validateConfigFile(configFile);
+if (configError) {
+  console.error(`[PolyMock] ${configError}`);
+  process.exit(1);
+}
 
 /* 监听地址：未设置 POLYMOCK_HOST 时保持原行为（监听全部网卡） */
 const host = process.env.POLYMOCK_HOST;
