@@ -389,7 +389,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
   border: 1px solid var(--line);
   background: var(--bg-soft);
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -419,7 +419,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
   padding: 9px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-soft);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 1px;
   color: var(--text-faint);
 }
@@ -450,7 +450,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
 .log-time,
 .log-dur {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -469,7 +469,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
 }
 
 .log-hit {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -495,7 +495,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
 }
 
 .detail-label {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -519,7 +519,7 @@ async function saveAsRoute(entry: RequestLogEntry) {
   border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--bg);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   word-break: break-all;
 }

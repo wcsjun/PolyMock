@@ -127,6 +127,7 @@ Differences in path mode:
 - **Comparison types**: `string` (default, stringified comparison) / `number` / `boolean` / `json` (deep equality) / `array` (containment — the actual array must contain every element of the expected JSON array, order-insensitive); an empty expected value means "the key just needs to exist"
 - **Required/optional**: conditions are required by default; with `required: false` a missing key passes (the value is only compared when present)
 - **requireMatch gate**: when enabled, every request must satisfy the route's `request` conditions or it is rejected with 400 and a reason (takes precedence over any variant)
+- **Request body template rendering (`renderRequest`)**: template placeholders in request-body strings (the same set as response templates, see "Dynamic response templates") are expanded **before condition matching**, and the expanded values feed the requireMatch / variant matches, the response template's `{{body.*}}`, and the request-log preview. A caller can therefore send `{"scene":"{{query.scene}}"}` and let the request parameters decide which scenario is hit, so one route definition serves many inputs; `{{body.other}}` reads the **original** request body (single pass, no cascading). **On by default** (a body without placeholders renders to the same value, i.e. it is a no-op); pass `false` explicitly to match the body as the client sent it. Placeholders with no resolvable value are kept verbatim, and `{{$id}}` shares the same route-level counter as the response template. It only applies to requests that match a registered route (unmatched requests are proxied upstream with the original request body)
 - **Route-level auth**: configure `auth` to simulate backend authentication — requests without valid credentials are rejected with 401; supports `apikey` (secret in a custom header, default `X-API-Key`, header name configurable) and `bearer` (`Authorization: Bearer <token>`, with `WWW-Authenticate: Bearer` on 401); 401 takes precedence over the requireMatch gate and applies to CRUD routes too
 
 ### Response capabilities
@@ -251,6 +252,7 @@ The `port` field of the `default` service is the main port (home of the web UI, 
       "jitterMs": 100,
       "failureRate": 0,
       "crud": false,
+      "renderRequest": true,
       "createdAt": 1730000002000
     }
   ],
@@ -269,7 +271,7 @@ Key fields:
 | `routes[].request` / `requireMatch` | Expected request conditions and the admission gate |
 | `routes[].variants[]` | Response variants: `name` / `match?` (omitted = always matches) / `response` |
 | `routes[].sequence[]` | Sequence responses: `{ status, body, headers? }` entries, returned cyclically |
-| `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` | Behavior switches and simulation parameters |
+| `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` / `renderRequest` | Behavior switches and simulation parameters (`renderRequest` = render request-body templates; **on by default**, disabled only by an explicit `false`) |
 | `settings.activeVariant` | Global scene set: when set, same-named variants are forced |
 
 Older configuration files (missing `version` or `version: 1`) are migrated automatically on load — fields stay compatible, no manual action needed.

@@ -529,7 +529,7 @@
         ],
         "summary": "注册接口",
         "operationId": "createRoute",
-        "description": "path 以 / 开头，支持 `:param` 路径参数段；同一服务内形状冲突（含参数段互撞）返回 409。响应体支持模板占位符：`{{query.x}}` `{{header.x}}` `{{body.x}}` `{{params.x}}` `{{$id}}` `{{$now}}` `{{$int(a,b)}}` 及内置假数据 `{{$name}}` 等；对象 body 中占位符按字符串替换，文本 body（JSON 字符串）支持值位置注入。",
+        "description": "path 以 / 开头，支持 `:param` 路径参数段；同一服务内形状冲突（含参数段互撞）返回 409。响应体支持模板占位符：`{{query.x}}` `{{header.x}}` `{{body.x}}` `{{params.x}}` `{{$id}}` `{{$now}}` `{{$int(a,b)}}` 及内置假数据 `{{$name}}` 等；对象 body 中占位符按字符串替换，文本 body（JSON 字符串）支持值位置注入。请求体里的同族占位符**默认**会在条件匹配前渲染（可显式传 `renderRequest: false` 关闭），渲染结果参与 requireMatch/变体匹配与响应模板 `{{body.*}}`；取不到值的占位符原样保留，不含占位符的请求体不受影响。",
         "requestBody": {
           "required": true,
           "content": {
@@ -1498,6 +1498,10 @@
           "crud": {
             "type": "boolean",
             "description": "有状态 CRUD：路径需含 :id 参数段；内存维护，重启清空"
+          },
+          "renderRequest": {
+            "type": "boolean",
+            "description": "请求体模板渲染：请求体里的模板占位符在匹配前渲染，渲染结果参与 requireMatch/变体条件匹配、响应模板与日志预览。**默认开启（缺省即渲染）**，显式传 false 关闭；仅在命中已注册路由时生效，未命中走代理转发时转发的是原始请求体"
           }
         }
       },
@@ -1580,6 +1584,10 @@
           },
           "crud": {
             "type": "boolean"
+          },
+          "renderRequest": {
+            "type": "boolean",
+            "description": "请求体模板渲染。缺省即开启，仅当显式存为 false 时关闭"
           },
           "createdAt": {
             "type": "integer",

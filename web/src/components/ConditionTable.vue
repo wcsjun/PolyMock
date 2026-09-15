@@ -116,7 +116,7 @@ function removeRow(index: number) {
 
 .cond-head {
   padding: 0 2px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   text-align: center;
 }
@@ -156,7 +156,7 @@ function removeRow(index: number) {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   cursor: pointer;
   white-space: nowrap;
@@ -190,8 +190,8 @@ function removeRow(index: number) {
   border-radius: 6px;
   background: none;
   color: var(--text-dim);
-  font-family: var(--mono);
-  font-size: 11px;
+  font-family: var(--sans);
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -203,7 +203,7 @@ function removeRow(index: number) {
 }
 
 .cond-empty {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-faint);
 }
 </style>

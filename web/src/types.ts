@@ -42,6 +42,8 @@ export interface Route {
   sequence?: Array<{ status: number; body: unknown; headers?: ResponseHeader[] }>;
   /** 有状态 CRUD：路径需含 :id 参数，服务内存维护资源集合（重启清空） */
   crud?: boolean;
+  /** 请求体模板渲染：默认开启，显式 false 关闭。开启时请求体里的模板占位符在匹配前渲染，渲染结果参与条件匹配与响应模板 */
+  renderRequest?: boolean;
   createdAt: number;
 }
 
@@ -142,6 +144,8 @@ export interface RoutePayload {
   failureRate?: number;
   sequence?: Array<{ status: number; headers?: ResponseHeader[]; body: string }>;
   crud?: boolean;
+  /** 请求体模板渲染开关（默认开启；新建态仅在关闭时携带 false） */
+  renderRequest?: boolean;
   /** 路由级认证：编辑态传 null 清除；新建态仅在开启时携带 */
   auth?: RouteAuth | null;
 }

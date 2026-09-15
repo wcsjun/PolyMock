@@ -506,7 +506,7 @@ function onSidebarRzDown(event: PointerEvent) {
   border-radius: 8px;
   background: none;
   color: var(--text-dim);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 13px;
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
@@ -532,7 +532,7 @@ function onSidebarRzDown(event: PointerEvent) {
 }
 
 .variant-label {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--text-dim);

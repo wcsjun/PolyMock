@@ -133,6 +133,8 @@ export interface Route {
   sequence?: Array<{ status: number; body: unknown; headers?: ResponseHeader[] }>;
   /** 有状态 CRUD：路径需含 :id 参数段，服务内存维护资源集合（重启清空） */
   crud?: boolean;
+  /** 请求体模板渲染：**默认开启**，显式 false 关闭。开启时请求体（对象/数组/字符串）里的模板占位符在匹配前渲染，渲染结果参与条件匹配、响应模板与日志预览 */
+  renderRequest?: boolean;
   createdAt: number;
 }
 

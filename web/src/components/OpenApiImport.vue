@@ -201,7 +201,7 @@ async function startImport() {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .report-op {
