@@ -167,7 +167,7 @@ async function clearAll() {
 }
 
 .crud-modal-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
@@ -183,7 +183,7 @@ async function clearAll() {
   border-radius: 8px;
   background: var(--panel);
   color: var(--text-dim);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;

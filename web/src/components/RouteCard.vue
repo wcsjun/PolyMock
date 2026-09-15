@@ -157,6 +157,7 @@ function openInBrowser() {
       <span :title="`响应 Content-Type（自定义头 Content-Type 优先于 contentType 字段）`">{{ contentTypeLabel }}</span>
       <span v-if="variants.length" class="route-chip">{{ variants.length }} 个变体</span>
       <span v-if="route.requireMatch" class="route-chip guard">需匹配</span>
+      <span v-if="route.renderRequest === false" class="route-chip off" title="已关闭请求体模板渲染：请求体按客户端原文参与条件匹配">原样请求体</span>
       <span v-if="route.auth" class="route-chip guard">认证 {{ route.auth.type === 'bearer' ? 'Bearer' : 'APIKey' }}</span>
       <span v-if="route.disabled" class="route-chip off">已停用</span>
       <span v-if="route.delayMs" class="route-chip">延迟 {{ route.delayMs }}ms</span>
@@ -229,7 +230,7 @@ function openInBrowser() {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: 12px;
   padding: 5px 8px;
   border: 1px dashed var(--line);
   border-radius: 6px;

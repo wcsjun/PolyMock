@@ -68,6 +68,10 @@ const TEXT_BODY_PLACEHOLDER = '任意文本，如 <h1>hello {{params.name}}</h1>
 /* 路径参数提示（含 {{ }} 字面量，同上须经常量绑定渲染） */
 const PATH_PARAM_HINT = '支持 :参数 段，如 /api/users/:id，响应模板可用 {{params.id}}';
 
+/* 请求体模板渲染说明（含 {{ }} 字面量，须经 :title 绑定常量，避免被模板插值解析） */
+const RENDER_REQUEST_HINT_TITLE =
+  '请求体字符串支持：{{query.参数名}} {{header.头名}} {{params.参数名}} {{body.同请求体其他字段}} {{$id}} 自增 {{$now}} 当前时间 {{$int(1,99)}} 随机整数 及 {{$name}} 等假数据；渲染结果参与条件匹配，也会被响应模板的 {{body.*}} 取到。取不到值的占位符原样保留；{{$id}} 与响应共用同一路由自增计数；不含占位符的请求体不受影响。关闭后请求体按客户端原文参与匹配。';
+
 /* 序列响应编辑器的占位示例（JSON 数组，每步 status + body） */
 const SEQUENCE_PLACEHOLDER = `[
   { "status": 200, "body": { "mode": "first" } },
@@ -134,6 +138,9 @@ const sequenceInvalid = ref(false);
 
 /* 有状态 CRUD 开关，随 payload.crud 提交 */
 const crudFlag = ref(false);
+
+/* 请求体模板渲染开关（默认开启，随 payload.renderRequest 提交；仅关闭时携带 false） */
+const renderRequestFlag = ref(true);
 
 /* ---------- 一键创建配套路由（仅新建态） ---------- */
 
@@ -286,6 +293,7 @@ watch(
       sequenceText.value = sequenceToDraftText(route.sequence);
       sequenceInvalid.value = false;
       crudFlag.value = route.crud === true;
+      renderRequestFlag.value = route.renderRequest !== false;
 
       /* 路由级认证回填 */
       authType.value = route.auth?.type ?? 'none';
@@ -327,6 +335,7 @@ function resetForm() {
   sequenceText.value = '';
   sequenceInvalid.value = false;
   crudFlag.value = false;
+  renderRequestFlag.value = true;
   companionSelection.value = {};
   authType.value = 'none';
   authValue.value = '';
@@ -555,13 +564,17 @@ async function submit() {
       if (failureRate.value === '') delete payload.failureRate;
       delete payload.disabled;
     }
-    /* 序列/CRUD：编辑态始终携带（序列为数组或 []）以便清除；新建态仅在有值时携带 */
+    /* 序列/CRUD：编辑态始终携带（序列为数组或 []）以便清除；新建态仅在有值时携带。
+     * 请求体模板相反 —— 默认开启，所以只在关闭时写进配置；编辑态若原先显式关闭过、现在要恢复默认，补一个 true 覆盖。 */
     if (editing) {
       payload.sequence = sequencePayload ?? [];
       payload.crud = crudFlag.value;
+      if (!renderRequestFlag.value) payload.renderRequest = false;
+      else if (editing.renderRequest === false) payload.renderRequest = true;
     } else {
       if (sequencePayload) payload.sequence = sequencePayload;
       if (crudFlag.value) payload.crud = true;
+      if (!renderRequestFlag.value) payload.renderRequest = false;
     }
     /* 认证：编辑态始终携带（null 表示清除）；新建态仅在开启时携带 */
     const authPayload: RouteAuth | null =
@@ -773,7 +786,19 @@ async function submit() {
 
           <div class="field resp-field">
             <div class="label-row">
-              <label>返回响应</label>
+              <span class="resp-title">
+                <label for="f-resp-status">返回响应</label>
+                <input
+                  id="f-resp-status"
+                  v-model.number="activeScene.status"
+                  class="status-input"
+                  title="响应状态码（100–599）"
+                  aria-label="响应状态码"
+                  type="number"
+                  min="100"
+                  max="599"
+                >
+              </span>
               <span class="label-row-ops">
                 <span v-if="activeIsDefault" class="hint">无场景命中时返回</span>
                 <span class="hint" :title="TEMPLATE_HINT_TITLE">模板可用</span>
@@ -781,7 +806,6 @@ async function submit() {
                 <span v-if="activeSceneTextMode" class="text-mode-badge" title="响应头声明了非 JSON Content-Type：body 按原样文本发送，不做 JSON 校验">文本模式</span>
               </span>
             </div>
-            <input v-model.number="activeScene.status" aria-label="响应状态码" type="number" min="100" max="599">
             <div class="resp-headers">
               <div class="label-row">
                 <label>响应头</label>
@@ -866,6 +890,16 @@ async function submit() {
           </template>
         </div>
 
+        <!-- 请求体模板渲染（默认开启）：请求体里的占位符先展开再匹配，让调用方用 body 决定命中哪个场景 -->
+        <label class="switch-row" for="f-render-request">
+          <span class="switch-text">
+            <span class="switch-title">渲染请求体模板</span>
+            <span class="hint" :title="RENDER_REQUEST_HINT_TITLE">默认开启：请求体里的占位符先展开，展开结果参与条件匹配与响应渲染。不含占位符的请求体不受影响，可关闭</span>
+          </span>
+          <input id="f-render-request" v-model="renderRequestFlag" type="checkbox" class="switch-input">
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
+
         <!-- 有状态 CRUD：同一集合需分别注册集合/条目路由 -->
         <label class="switch-row" for="f-crud">
           <span class="switch-text">
@@ -944,7 +978,7 @@ async function submit() {
 }
 
 .scene-side-title {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -969,7 +1003,7 @@ async function submit() {
   border-radius: 6px;
   background: none;
   color: var(--text-dim);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   text-align: left;
   cursor: pointer;
@@ -987,7 +1021,7 @@ async function submit() {
 
 .scene-item-index {
   flex: none;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-faint);
   min-width: 12px;
 }
@@ -1019,7 +1053,7 @@ async function submit() {
   border-radius: 4px;
   background: var(--bg);
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   transition: all 0.15s;
@@ -1046,8 +1080,8 @@ async function submit() {
   border-radius: 6px;
   background: none;
   color: var(--accent-strong);
-  font-family: var(--mono);
-  font-size: 11px;
+  font-family: var(--sans);
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -1074,7 +1108,7 @@ async function submit() {
   background: var(--bg-soft);
   border: 1px solid var(--line);
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .body-json-editor {
@@ -1090,8 +1124,23 @@ async function submit() {
   padding-top: 12px;
 }
 
-.resp-field input[type='number'] {
-  width: 110px;
+/* 状态码与「返回响应」标题同行，避免独占一行留出空洞 */
+.resp-title {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.resp-title label {
+  margin-bottom: 0;
+}
+
+.resp-title .status-input {
+  width: 96px;
+  padding: 4px 8px;
+  font-size: 13px;
+  text-align: center;
 }
 
 .switch-field { margin-top: 2px; }
@@ -1161,7 +1210,7 @@ async function submit() {
   border: 1px solid var(--warn);
   border-radius: 999px;
   color: var(--warn);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -1200,7 +1249,7 @@ async function submit() {
 .companion-method {
   flex: none;
   width: 46px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -1208,7 +1257,7 @@ async function submit() {
   flex: 1;
   min-width: 0;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -1217,7 +1266,7 @@ async function submit() {
 
 .companion-name {
   flex: none;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 </style>

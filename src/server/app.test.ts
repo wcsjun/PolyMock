@@ -783,13 +783,13 @@ describe('createApp 集成测试', () => {
 
   // ---- C1-C8：禁用 / 延迟 / 故障注入 / 模板 / 请求日志 / 场景集 / 代理 ----
 
-  async function putRoute(id: string, payload: Record<string, unknown>): Promise<{ status: number; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number; sequence?: unknown; crud?: boolean } }> {
+  async function putRoute(id: string, payload: Record<string, unknown>): Promise<{ status: number; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number; sequence?: unknown; crud?: boolean; renderRequest?: boolean } }> {
     const res = await fetch(`${server.baseUrl}/__polymock/routes/${id}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const body = (await res.json()) as { ok: boolean; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number; sequence?: unknown; crud?: boolean } };
+    const body = (await res.json()) as { ok: boolean; route?: { id: string; disabled?: boolean; delayMs?: number; failureRate?: number; sequence?: unknown; crud?: boolean; renderRequest?: boolean } };
     return { status: res.status, route: body.route };
   }
 
@@ -865,6 +865,141 @@ describe('createApp 集成测试', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ token: 'xyz', echo: '小明', seq: '1' });
+  });
+
+  it('renderRequest 开启后请求体占位符在匹配前渲染：由 query 决定命中哪个变体', async () => {
+    await registerRoute({
+      name: '请求体模板',
+      method: 'POST',
+      path: '/api/dynamic',
+      renderRequest: true,
+      variants: [
+        { name: '成功', match: { body: [{ key: 'scene', value: 'success' }] }, response: { body: { hit: 'success', name: '{{body.name}}' } } },
+        { name: '失败', match: { body: [{ key: 'scene', value: 'fail' }] }, response: { status: 400, body: { hit: 'fail' } } },
+      ],
+      response: { status: 200, body: { hit: 'default' } },
+    });
+
+    /* 请求体的值写成占位符：同一份接口配置即可被调用方驱动出不同场景 */
+    const fail = await fetch(`${server.baseUrl}/api/dynamic?scene=fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scene: '{{query.scene}}' }),
+    });
+    expect(fail.status).toBe(400);
+    expect(await fail.json()).toEqual({ hit: 'fail' });
+
+    /* 日志预览记录的是渲染后的请求体，而不是原始占位符 */
+    const entry = await latestLog();
+    expect(entry.bodyPreview).toBe('{"scene":"fail"}');
+
+    const success = await fetch(`${server.baseUrl}/api/dynamic?scene=success`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scene: '{{query.scene}}', name: '张三' }),
+    });
+    expect(success.status).toBe(200);
+    expect(await success.json()).toEqual({ hit: 'success', name: '张三' });
+  });
+
+  it('renderRequest 缺省开启：未配置该字段时请求体占位符照样在匹配前展开', async () => {
+    await registerRoute({
+      name: '默认渲染请求体',
+      method: 'POST',
+      path: '/api/default-render-body',
+      variants: [
+        { name: '成功', match: { body: [{ key: 'scene', value: 'success' }] }, response: { body: { hit: 'success' } } },
+      ],
+      response: { status: 200, body: { hit: 'default', echo: '{{body.scene}}' } },
+    });
+
+    /* 未显式配置 renderRequest：body 里的占位符仍会展开，故命中 scene=success */
+    const hit = await fetch(`${server.baseUrl}/api/default-render-body?scene=success`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scene: '{{query.scene}}' }),
+    });
+    expect(await hit.json()).toEqual({ hit: 'success' });
+
+    /* 不含占位符的请求体不受影响：渲染是 no-op，按原值匹配并回显 */
+    const plain = await fetch(`${server.baseUrl}/api/default-render-body?scene=success`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scene: 'nope' }),
+    });
+    expect(await plain.json()).toEqual({ hit: 'default', echo: 'nope' });
+  });
+
+  it('renderRequest 显式 false：请求体保持字面量，条件按原始字面量比对', async () => {
+    await registerRoute({
+      name: '不渲染请求体',
+      method: 'POST',
+      path: '/api/static-body',
+      renderRequest: false,
+      variants: [
+        { name: '成功', match: { body: [{ key: 'scene', value: 'success' }] }, response: { body: { hit: 'success' } } },
+      ],
+      response: { status: 200, body: { hit: 'default', echo: '{{body.scene}}' } },
+    });
+
+    /* 显式关闭时 body 保持字面量：占位符不展开，故不满足 scene=success；
+       响应模板把该字面量原样回显，证明渲染只做一遍、不会二次展开 */
+    const res = await fetch(`${server.baseUrl}/api/static-body?scene=success`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scene: '{{query.scene}}' }),
+    });
+    expect(await res.json()).toEqual({ hit: 'default', echo: '{{query.scene}}' });
+  });
+
+  it('renderRequest 支持路径参数与假数据，未解析占位符原样保留；$id 与响应共用路由自增', async () => {
+    await registerRoute({
+      name: '请求体模板增强',
+      method: 'POST',
+      path: '/api/dynamic/:id',
+      renderRequest: true,
+      response: {
+        status: 200,
+        body: { orderId: '{{body.orderId}}', fromParam: '{{body.fromParam}}', missing: '{{body.missing}}', seq: '{{$id}}' },
+      },
+    });
+
+    const res = await fetch(`${server.baseUrl}/api/dynamic/77`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        orderId: '{{$int(1000,9999)}}',
+        fromParam: '{{params.id}}',
+        missing: '{{body.nope}}',
+        firstSeq: '{{$id}}',
+      }),
+    });
+    const body = (await res.json()) as { orderId: string; fromParam: string; missing: string; seq: string };
+    expect(body.orderId).toMatch(/^[1-9]\d{3}$/);
+    expect(body.fromParam).toBe('77');
+    /* 取不到的占位符原样保留，且响应侧不会二次渲染 */
+    expect(body.missing).toBe('{{body.nope}}');
+    /* 请求体里的 {{$id}} 已消耗一次自增，响应里的下一个为 2 */
+    expect(body.seq).toBe('2');
+  });
+
+  it('renderRequest 需为布尔值；PUT 单独传入可显式改写（含 false 关闭）', async () => {
+    const bad = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏渲染', method: 'POST', path: '/api/bad-render', renderRequest: 'yes', response: { status: 200, body: {} } }),
+    });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe('renderRequest 需为布尔值');
+
+    const id = await registerRoute({ name: '可改写渲染', method: 'POST', path: '/api/toggle-render', response: { status: 200, body: {} } });
+    const off = await putRoute(id, { renderRequest: false });
+    expect(off.status).toBe(200);
+    expect(off.route?.renderRequest).toBe(false);
+
+    const on = await putRoute(id, { renderRequest: true });
+    expect(on.status).toBe(200);
+    expect(on.route?.renderRequest).toBe(true);
   });
 
   it('请求日志记录命中路由与变体，DELETE 清空', async () => {

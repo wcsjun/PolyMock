@@ -127,6 +127,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 - **比对类型**：`string`（缺省，字符串化比对）/ `number` / `boolean` / `json`（深度相等）/ `array`（包含匹配，实际数组需包含期望 JSON 数组的全部元素，无序）；期望值为空串表示仅要求 key 存在
 - **必填/选填**：条件默认必填，`required: false` 时 key 缺失视为通过（存在才比对）
 - **requireMatch 准入门槛**：开启后所有请求必须满足接口的 `request` 条件，否则返回 400 并说明不匹配原因（优先于任何变体）
+- **请求体模板渲染 `renderRequest`**：请求体字符串里的模板占位符（与响应模板同一套，见「动态响应模板」）会**在条件匹配之前**展开，展开结果参与 requireMatch / 变体条件匹配、响应模板的 `{{body.*}}` 与请求日志预览。因此调用方可以传入 `{"scene":"{{query.scene}}"}` 这类请求体，由请求参数决定命中哪个场景，一份配置服务多种输入；`{{body.其他字段}}` 读取的是**原始请求体**（同一遍渲染，不级联）。**默认开启**（不含占位符的请求体渲染结果与原值相同，等价于无操作），需要让请求体按客户端原文参与匹配时显式传 `false`；取不到值的占位符原样保留，`{{$id}}` 与响应模板共用同一路由级自增计数。仅在命中已注册路由时生效（未命中会走代理转发，转发的是原始请求体）
 - **路由级认证**：`auth` 配置后模拟后端鉴权，未携带正确凭证返回 401；支持 `apikey`（自定义 header 携带密钥，缺省 `X-API-Key`，可改 header 名）与 `bearer`（`Authorization: Bearer <token>`，401 时附 `WWW-Authenticate: Bearer`）；401 优先于 requireMatch 门槛，CRUD 接口同样生效
 
 ### 响应能力
@@ -251,6 +252,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
       "jitterMs": 100,
       "failureRate": 0,
       "crud": false,
+      "renderRequest": true,
       "createdAt": 1730000002000
     }
   ],
@@ -269,7 +271,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | `routes[].request` / `requireMatch` | 预期请求条件与准入开关 |
 | `routes[].variants[]` | 响应变体：`name` / `match?`（缺省=总是命中）/ `response` |
 | `routes[].sequence[]` | 序列响应：`{ status, body, headers? }` 数组，循环返回 |
-| `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` | 行为开关与模拟参数 |
+| `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` / `renderRequest` | 行为开关与模拟参数（`renderRequest` = 请求体模板渲染，**缺省开启**，仅显式 `false` 关闭） |
 | `settings.activeVariant` | 全局场景集：非空时同名变体强制命中 |
 
 旧版本配置（缺失 `version` 或 `version: 1`）加载时自动迁移到当前版本，字段保持兼容，无需手动处理。

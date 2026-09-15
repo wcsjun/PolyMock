@@ -398,6 +398,30 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     const route = found?.route;
     const routeParams = found?.params ?? {};
 
+    /*
+     * ---- 请求体模板渲染（默认开启，路由可显式 renderRequest:false 关闭）----
+     * 在条件匹配之前就地渲染 req.body：渲染结果参与 requireMatch / 变体条件匹配、响应模板的 {{body.*}} 与日志预览。
+     * 模板上下文取自原始请求（query / header / params / body 自身），因此 {{body.other}} 可自引用同一请求体的其它字段；
+     * 取不到的占位符原样保留（与其他模板渲染一致），因此不含占位符的请求体渲染结果与原值相同。
+     * {{$id}} 等有副作用的占位符与响应模板共用同一路由级自增计数。
+     * 仅在命中已注册路由时渲染：未命中会走下面的代理转发，转发的是原始请求体，与本开关无关。
+     */
+    if (route && route.renderRequest !== false) {
+      const rawBody = req.body;
+      req.body = renderTemplate(rawBody, {
+        query: flattenQuery(req.query as Record<string, unknown>),
+        headers: flattenHeaders(req.headers),
+        params: routeParams,
+        body: rawBody,
+        routeId: route.id,
+        nextId: () => {
+          const next = (idCounters.get(route.id) ?? 0) + 1;
+          idCounters.set(route.id, next);
+          return next;
+        },
+      });
+    }
+
     // ---- 未命中：配置了代理目标则转发上游，否则 404 ----
     if (!route) {
       const proxyTarget = registry.getService(serviceId)?.proxyTarget;

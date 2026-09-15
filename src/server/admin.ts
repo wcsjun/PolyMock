@@ -214,13 +214,15 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
   return { ok: true, value: list };
 }
 
-/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate / crud）；未提供的字段不出现在结果中 */
-function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud'>> {
+/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate / crud / renderRequest）；未提供的字段不出现在结果中 */
+function parseBehaviorFields(
+  raw: unknown,
+): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud' | 'renderRequest'>> {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, error: '请求体需为 JSON 对象' };
   }
   const source = raw as Record<string, unknown>;
-  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud'> = {};
+  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud' | 'renderRequest'> = {};
   if (source.disabled !== undefined) {
     if (typeof source.disabled !== 'boolean') {
       return { ok: false, error: 'disabled 需为布尔值' };
@@ -247,6 +249,12 @@ function parseBehaviorFields(raw: unknown): ParseResult<Pick<Route, 'disabled' |
       return { ok: false, error: 'crud 需为布尔值' };
     }
     result.crud = source.crud;
+  }
+  if (source.renderRequest !== undefined) {
+    if (typeof source.renderRequest !== 'boolean') {
+      return { ok: false, error: 'renderRequest 需为布尔值' };
+    }
+    result.renderRequest = source.renderRequest;
   }
   return { ok: true, value: result };
 }

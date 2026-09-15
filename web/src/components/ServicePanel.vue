@@ -404,7 +404,7 @@ async function saveProxy(svc: ServiceInfo) {
   background: none;
   color: var(--text-dim);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
   cursor: pointer;
   white-space: nowrap;
@@ -467,7 +467,7 @@ async function saveProxy(svc: ServiceInfo) {
   background: none;
   padding: 0;
   cursor: pointer;
-  font-family: var(--mono);
+  font-family: var(--sans);
   color: var(--text);
   text-align: left;
 }
@@ -494,7 +494,7 @@ async function saveProxy(svc: ServiceInfo) {
 
 .crud-group-meta {
   flex: none;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
@@ -510,8 +510,8 @@ async function saveProxy(svc: ServiceInfo) {
   border-radius: 6px;
   background: var(--panel);
   color: var(--text-dim);
-  font-family: var(--mono);
-  font-size: 11px;
+  font-family: var(--sans);
+  font-size: 12px;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
@@ -540,7 +540,7 @@ async function saveProxy(svc: ServiceInfo) {
   border-radius: 8px;
   background: none;
   color: var(--text-dim);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
