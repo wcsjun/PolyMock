@@ -116,7 +116,7 @@ Differences in path mode:
 ### Route management
 
 - **Service groups**: besides the default service on the main port, create any number of service groups — each listens on its own port in port mode, or is dispatched from the main port under a `/{basePath}` prefix in path mode (see "Run modes")
-- **Web console**: drawer-style form for creating/editing routes; conditions are edited in Postman-style tables (the Body tab converts between table rows and JSON in both directions)
+- **Web console**: drawer-style form for creating/editing routes, organised as five cards — Basics / Request admission / Response branches / Advanced options / Match preview; conditions are edited in Postman-style tables (the Body tab converts between table rows and JSON in both directions and offers three body-matching strategies)
 - **Enable/disable routes**: a disabled route is treated as unregistered (and falls through to the proxy when configured)
 - **Delete confirmation**: deleting a service or a route always asks for confirmation
 
@@ -124,15 +124,17 @@ Differences in path mode:
 
 - **Path matching**: exact paths plus `:param` segments (e.g. `/api/users/:id`); shape conflicts (including clashing parameter segments) are rejected with 409 at registration time
 - **Condition dimensions**: three groups — query parameters, request headers (case-insensitive), and JSON body dot paths (e.g. `user.id`)
-- **Comparison types**: `string` (default, stringified comparison) / `number` / `boolean` / `json` (deep equality) / `array` (containment — the actual array must contain every element of the expected JSON array, order-insensitive); an empty expected value means "the key just needs to exist"
-- **Required/optional**: conditions are required by default; with `required: false` a missing key passes (the value is only compared when present)
-- **requireMatch gate**: when enabled, every request must satisfy the route's `request` conditions or it is rejected with 400 and a reason (takes precedence over any variant)
+- **Comparison types**: `string` (default, stringified comparison) / `number` / `boolean` / `json` (deep equality) / `array` (containment — the actual array must contain every element of the expected JSON array, order-insensitive); without a `match` operator an empty expected value means "the key just needs to exist" (see the next bullet)
+- **Required/optional**: conditions are required by default; with `required: false` a missing key passes (the value is only compared when present) — this also holds under an explicit `match` operator
+- **Match operators (`match`, optional)**: `exists` = the key only needs to exist (an empty string counts as present and `value` is ignored) / `equals` = explicit equality (`value: ""` then means "equals the empty string"; the comparison still follows `type`) / `nonEmpty` = the key exists and is neither an empty string nor `null` / `regex` = `value` is a regular expression tested against the stringified actual value (an invalid pattern fails that condition, with "not a valid regex" in the reason). Omitting `match` keeps the historical semantics (`required` decides whether a missing key passes, an empty `value` means "must merely exist"), so existing configs need no migration
+- **requireMatch gate (request admission)**: when enabled, every request must satisfy the route's `request` conditions, otherwise it is rejected with the route's `gateStatus` (default `400`; `404` hides the route, `422` is also allowed) and a reason (takes precedence over any variant/branch, and applies to ordinary and CRUD routes alike; route-level auth still wins with 401)
+- **Whole-body matching strategy (`bodyMatch` / `bodyRaw`, optional)**: `subset` (default) matches the `request.body` condition rows as dot-path subsets; `deepEqual` requires the request body to be deeply equal to the JSON parsed from `bodyRaw` (field order and whitespace do not matter, extra fields break the match); `textEqual` requires the raw request text to equal `bodyRaw` character by character (spaces, newlines and field order all matter). Under `deepEqual` / `textEqual` the `request.body` condition rows are ignored. Raw text comes from the body parser for JSON requests and from a separate read for non-JSON requests (the existing parsing/proxy behaviour is unchanged); a missing body or one above 10 MB fails that condition as "raw request body unavailable". `renderRequest` renders the parsed body, so `textEqual` compares against the client's original text
 - **Request body template rendering (`renderRequest`)**: template placeholders in request-body strings (the same set as response templates, see "Dynamic response templates") are expanded **before condition matching**, and the expanded values feed the requireMatch / variant matches, the response template's `{{body.*}}`, and the request-log preview. A caller can therefore send `{"scene":"{{query.scene}}"}` and let the request parameters decide which scenario is hit, so one route definition serves many inputs; `{{body.other}}` reads the **original** request body (single pass, no cascading). **On by default** (a body without placeholders renders to the same value, i.e. it is a no-op); pass `false` explicitly to match the body as the client sent it. Placeholders with no resolvable value are kept verbatim, and `{{$id}}` shares the same route-level counter as the response template. It only applies to requests that match a registered route (unmatched requests are proxied upstream with the original request body)
 - **Route-level auth**: configure `auth` to simulate backend authentication — requests without valid credentials are rejected with 401; supports `apikey` (secret in a custom header, default `X-API-Key`, header name configurable) and `bearer` (`Authorization: Bearer <token>`, with `WWW-Authenticate: Bearer` on 401); 401 takes precedence over the requireMatch gate and applies to CRUD routes too
 
 ### Response capabilities
 
-- **Response variants (scenarios)**: attach multiple named variants to a route; they are matched in array order and the first one whose conditions all pass wins — otherwise the default response is used
+- **Response variants (scenarios, shown as "response branches" in the console)**: attach multiple named variants to a route; they are matched in array order and the first one whose conditions all pass wins — otherwise the default response is used. The default response is the fallback branch and carries no conditions of its own: conditions that *every* request must satisfy belong in request admission (`requireMatch` / `request`)
 - **Sequence responses**: cycle through a list of responses in hit order (e.g. "ok → ok → error"), taking precedence over the scene set, variants, and the default response
 - **Global scene set**: once `activeVariant` is set, every route that has a variant with that name is forced onto it (its `match` conditions are bypassed) — one click switches the whole server
 - **Dynamic response templates**: inside string values of the response body, use `{{query.x}}`, `{{header.x}}`, `{{body.x}}` (dot path), `{{params.x}}` (path parameters), `{{$id}}` (per-route auto increment), `{{$now}}` (ISO timestamp), `{{$int(a,b)}}` (random integer, inclusive), plus built-in fake data: `{{$name}}` `{{$ename}}` `{{$email}}` `{{$phone}}` `{{$city}}` `{{$word}}` `{{$bool}}`. Unresolvable placeholders are left as-is
@@ -141,7 +143,7 @@ Differences in path mode:
 - **Non-JSON text responses**: when the effective Content-Type (custom `Content-Type` header takes precedence over the `contentType` field) is non-JSON (e.g. `text/html`, `text/plain`, `application/xml`), the body is stored and sent verbatim as text — no JSON validation — with template placeholders still rendered (values injected as plain text); an unset or JSON Content-Type keeps the strict JSON validation. "Save as route" in the request log picks the mode automatically, so text upstream responses can be captured as mock routes directly
 - **Formatting and instant validation**: one-click body formatting, on-blur JSON validation with inline error highlight in JSON mode (skipped when a non-JSON Content-Type is declared), and a second server-side validation on submit
 
-Response resolution order: route-level auth (401) → `requireMatch` gate → sequence response → global scene set → conditional variants → default response.
+Response resolution order: route-level auth (401) → request admission (`requireMatch`, failures answered with `gateStatus`, default 400) → sequence response → global scene set → conditional variants (response branches) → default response.
 
 ### Stateful CRUD
 
@@ -181,7 +183,7 @@ Open <http://localhost:33233> in a browser and switch between three views in the
 
 | View | Description |
 | --- | --- |
-| **Routes** | Service groups (create/delete, port, basePath, running status, a header chip to set proxy pass-through) and route cards (method color, condition summary, variant list, effective response Content-Type); CRUD routes are grouped by collection (the group header opens a data modal and deletes the whole collection); a drawer form edits conditions, variants, sequence responses, delay/jitter/fault injection, and the CRUD switch (when enabled, companion list/create/detail/update/delete routes can be created in one click); the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
+| **Routes** | Service groups (create/delete, port, basePath, running status, a header chip to set proxy pass-through) and route cards (method color, condition summary, variant list, effective response Content-Type); CRUD routes are grouped by collection (the group header opens a data modal and deletes the whole collection); the create/edit drawer is organised as five cards — **Basics / Request admission / Response branches / Advanced options / Match preview**: "Request admission" turns the conditions that used to sit on the default response into a shared gate (the switch is `requireMatch`, the status dropdown is `gateStatus`), with condition rows laid out as source / parameter name / operator (exists · equals · non-empty · regex) / value (the type dropdown appears only for "equals", and the enabled/required checkboxes stay), and Body offering field containment / full JSON equality / verbatim text equality; "Response branches" is edited per tab (the default response is the fallback and carries no conditions; drag the branch tabs to reorder the match priority, and the delete button sits at the top-right of the branch panel) and custom response headers live behind the "enable custom response headers" switch in "Advanced options" (which also holds auth, delay/jitter/failure rate, sequence responses and the CRUD switch — CRUD can create its companion list/create/detail/update/delete routes in one click); "Match preview" is a purely client-side walkthrough (path → auth → request admission → sequence response → global scene set → branch → default response) that sends no real request; the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
 | **Embed test** | Load any page URL into a resizable iframe container (drag the right/bottom/bottom-right edges, fill the stage, open in a new tab) to verify your page against the mocks without leaving the console |
 | **Request log** | Log list with filters (status/service/path keyword), a live (SSE) / polling badge, and actions to replay, copy curl, clear, or save a proxied entry as a route |
 
@@ -210,6 +212,8 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 | GET | `/__polymock/events` | SSE stream of request logs (`event: log`, data is the entry JSON) |
 
 > When `POLYMOCK_ADMIN_TOKEN` is set, all of the above require the `x-polymock-token` header or a `?token=` query parameter, otherwise 401.
+
+> Admission-field validation when registering or updating a route: a non-enum `match` on a condition row or a non-enum `request.bodyMatch` returns 400; a `gateStatus` other than `400` / `404` / `422` returns 400; `bodyRaw` must be non-empty when `bodyMatch` is `deepEqual` / `textEqual` (and valid JSON for `deepEqual`), otherwise 400; under `bodyMatch: subset` a `bodyRaw` is ignored and never persisted. `PUT /__polymock/routes/:id` accepts `gateStatus` as a standalone patch field (sending `400` restores the default), and the 400 raised for an empty patch lists `gateStatus` among the updatable fields.
 
 ## Configuration File
 
@@ -240,11 +244,17 @@ The `port` field of the `default` service is the main port (home of the web UI, 
       "path": "/api/users/:id",
       "name": "User detail",
       "response": { "status": 200, "body": { "id": "{{params.id}}", "name": "{{$name}}" } },
-      "request": { "headers": [{ "key": "X-Token", "value": "", "required": false }] },
-      "requireMatch": false,
+      "request": {
+        "headers": [{ "key": "X-Token", "value": "", "match": "exists", "required": false }],
+        "query": [{ "key": "id", "value": "^\\d+$", "match": "regex" }]
+      },
+      "requireMatch": true,
+      "gateStatus": 422,
       "variants": [
-        { "id": "v-01", "name": "admin view", "match": { "headers": [{ "key": "X-Role", "value": "admin" }] },
-          "response": { "status": 200, "body": { "role": "admin" } } }
+        { "id": "v-01", "name": "admin view", "match": { "headers": [{ "key": "X-Role", "value": "admin", "match": "equals" }] },
+          "response": { "status": 200, "body": { "role": "admin" } } },
+        { "id": "v-02", "name": "payment callback", "match": { "bodyMatch": "deepEqual", "bodyRaw": "{\"status\":\"PAID\"}" },
+          "response": { "status": 200, "body": { "received": true } } }
       ],
       "sequence": [],
       "disabled": false,
@@ -268,13 +278,13 @@ Key fields:
 | `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; in path mode non-default services are hosted by their `basePath` prefix instead (`port` unused, set to `0`); **the `default` service's `port` is the main port — edit it and restart to take effect** |
 | `routes[].method` / `path` | HTTP method and path; paths support `:param` segments |
 | `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body`; the body is strictly validated in JSON mode and stored verbatim as text when the effective Content-Type is non-JSON |
-| `routes[].request` / `requireMatch` | Expected request conditions and the admission gate |
-| `routes[].variants[]` | Response variants: `name` / `match?` (omitted = always matches) / `response` |
+| `routes[].request` / `requireMatch` / `gateStatus` | Request admission: expected request conditions, the admission switch, and the failure status (`gateStatus` defaults to `400`; `404` hides the route, `422` is also allowed). Condition rows accept a `match` operator (`exists` / `equals` / `nonEmpty` / `regex`; omitted keeps the historical semantics); the body can be matched as a whole via `bodyMatch` (`subset` default / `deepEqual` / `textEqual`) plus `bodyRaw` (the expected full JSON for `deepEqual`, the expected verbatim text for `textEqual`; ignored under `subset`) |
+| `routes[].variants[]` | Response variants ("response branches" in the console): `name` / `match?` (omitted = always matches; the condition shape is the same as `request`) / `response` |
 | `routes[].sequence[]` | Sequence responses: `{ status, body, headers? }` entries, returned cyclically |
 | `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` / `renderRequest` | Behavior switches and simulation parameters (`renderRequest` = render request-body templates; **on by default**, disabled only by an explicit `false`) |
 | `settings.activeVariant` | Global scene set: when set, same-named variants are forced |
 
-Older configuration files (missing `version` or `version: 1`) are migrated automatically on load — fields stay compatible, no manual action needed.
+Older configuration files (missing `version` or `version: 1`) are migrated automatically on load — fields stay compatible, no manual action needed. Every field added for request admission (the `match` operator on condition rows, the route's `gateStatus`, and `bodyMatch` / `bodyRaw` on the request group) is optional, so existing configs need no migration and `version` stays `2`.
 
 ## Environment Variables
 

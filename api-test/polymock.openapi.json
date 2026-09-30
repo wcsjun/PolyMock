@@ -3,7 +3,7 @@
   "info": {
     "title": "PolyMock 管理 API 与 Mock 分发契约",
     "version": "1.0.0",
-    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → requireMatch 准入门槛(400) → 序列响应 → 全局场景集 → 条件变体 → 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）",
+    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足（请求准入失败按路由的 `gateStatus` 返回，缺省 400，可为 404 / 422）；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → 请求准入 requireMatch（失败按 gateStatus，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）",
     "contact": {
       "name": "PolyMock"
     }
@@ -529,7 +529,7 @@
         ],
         "summary": "注册接口",
         "operationId": "createRoute",
-        "description": "path 以 / 开头，支持 `:param` 路径参数段；同一服务内形状冲突（含参数段互撞）返回 409。响应体支持模板占位符：`{{query.x}}` `{{header.x}}` `{{body.x}}` `{{params.x}}` `{{$id}}` `{{$now}}` `{{$int(a,b)}}` 及内置假数据 `{{$name}}` 等；对象 body 中占位符按字符串替换，文本 body（JSON 字符串）支持值位置注入。请求体里的同族占位符**默认**会在条件匹配前渲染（可显式传 `renderRequest: false` 关闭），渲染结果参与 requireMatch/变体匹配与响应模板 `{{body.*}}`；取不到值的占位符原样保留，不含占位符的请求体不受影响。",
+        "description": "path 以 / 开头，支持 `:param` 路径参数段；同一服务内形状冲突（含参数段互撞）返回 409。响应体支持模板占位符：`{{query.x}}` `{{header.x}}` `{{body.x}}` `{{params.x}}` `{{$id}}` `{{$now}}` `{{$int(a,b)}}` 及内置假数据 `{{$name}}` 等；对象 body 中占位符按字符串替换，文本 body（JSON 字符串）支持值位置注入。请求体里的同族占位符**默认**会在条件匹配前渲染（可显式传 `renderRequest: false` 关闭），渲染结果参与 requireMatch/变体匹配与响应模板 `{{body.*}}`；取不到值的占位符原样保留，不含占位符的请求体不受影响。请求准入：`requireMatch: true` 时按 `request` 校验，失败按 `gateStatus`（缺省 400）返回；条件行支持 `match` 操作符（`exists` / `equals` / `nonEmpty` / `regex`），body 支持整体匹配 `bodyMatch`（`subset` / `deepEqual` / `textEqual`）+ `bodyRaw`。",
         "requestBody": {
           "required": true,
           "content": {
@@ -548,6 +548,17 @@
                     "name": "{{$name}}"
                   }
                 },
+                "request": {
+                  "headers": [
+                    {
+                      "key": "X-Tenant",
+                      "value": "^t-\\d+$",
+                      "match": "regex"
+                    }
+                  ]
+                },
+                "requireMatch": true,
+                "gateStatus": 404,
                 "variants": [
                   {
                     "name": "不存在",
@@ -555,7 +566,8 @@
                       "query": [
                         {
                           "key": "missing",
-                          "value": "1"
+                          "value": "1",
+                          "match": "equals"
                         }
                       ]
                     },
@@ -598,7 +610,7 @@
             }
           },
           "400": {
-            "description": "method/path/name/serviceId/行为字段等参数不合法",
+            "description": "method/path/name/serviceId/行为字段等参数不合法；条件行 `match`、`request.bodyMatch` / `request.bodyRaw`、`gateStatus` 不合法同样返回 400",
             "content": {
               "application/json": {
                 "schema": {
@@ -701,7 +713,7 @@
         ],
         "summary": "更新接口（patch 语义）",
         "operationId": "updateRoute",
-        "description": "只传需要修改的字段；`auth: null` 表示清除鉴权；`disabled/delayMs/jitterMs/failureRate/crud` 可单独作为 patch。serviceId 变更即移动服务分组。空 patch 返回 400。",
+        "description": "只传需要修改的字段；`auth: null` 表示清除鉴权；`disabled/delayMs/jitterMs/failureRate/crud/gateStatus` 可单独作为 patch（`gateStatus` 传 400 即复位为缺省）。serviceId 变更即移动服务分组。空 patch 返回 400，错误信息列出含 `gateStatus` 的可更新字段。",
         "parameters": [
           {
             "name": "id",
@@ -723,6 +735,27 @@
                 "禁用": {
                   "value": {
                     "disabled": true
+                  }
+                },
+                "改准入失败码": {
+                  "value": {
+                    "gateStatus": 404
+                  }
+                },
+                "改请求准入条件": {
+                  "value": {
+                    "requireMatch": true,
+                    "request": {
+                      "headers": [
+                        {
+                          "key": "X-Token",
+                          "value": "",
+                          "match": "exists"
+                        }
+                      ],
+                      "bodyMatch": "deepEqual",
+                      "bodyRaw": "{\"status\":\"PAID\"}"
+                    }
                   }
                 },
                 "改响应": {
@@ -1163,7 +1196,7 @@
         }
       },
       "MockDispatch": {
-        "description": "Mock 分发响应：命中接口返回注册的状态码与响应体（模板渲染后）；条件不满足返回 400；未注册返回 404；认证失败 401；故障注入 500；配置代理时未命中转发上游",
+        "description": "Mock 分发响应：命中接口返回注册的状态码与响应体（模板渲染后）；请求准入（requireMatch）不满足时按路由的 gateStatus 返回（缺省 400，可选 404 隐藏接口 / 422）；未注册返回 404；认证失败 401；故障注入 500；配置代理时未命中转发上游",
         "content": {
           "application/json": {
             "schema": {},
@@ -1294,7 +1327,7 @@
           },
           "value": {
             "type": "string",
-            "description": "期望值；空串表示仅要求 key 存在"
+            "description": "期望值；未指定 match 时空串表示仅要求 key 存在，match=equals 时表示等于空字符串，match=exists / nonEmpty 时被忽略（regex 时为正则表达式）"
           },
           "type": {
             "type": "string",
@@ -1311,13 +1344,23 @@
           "required": {
             "type": "boolean",
             "default": true,
-            "description": "false 时 key 缺失视为通过（存在才比对）"
+            "description": "false 时 key 缺失视为通过（存在才比对）；显式 match 操作符下同样生效"
+          },
+          "match": {
+            "type": "string",
+            "enum": [
+              "exists",
+              "equals",
+              "nonEmpty",
+              "regex"
+            ],
+            "description": "匹配操作符（可选）：exists=只要求 key 存在（空字符串也算存在，value 被忽略）；equals=显式等值比对（value 为空串表示「等于空字符串」，比对方式仍由 type 决定）；nonEmpty=key 存在且不是空字符串 / null；regex=value 为正则表达式，匹配字符串化后的实际值（正则非法时该条件失败，错误信息含「不是合法正则」）。缺省不传时保持历史语义：required 控制 key 缺失是否通过，value 为空串表示仅要求存在，旧配置无需迁移"
           }
         }
       },
       "RouteRequest": {
         "type": "object",
-        "description": "预期请求条件组；requireMatch=true 时作为接口准入门槛，否则仅用于变体匹配",
+        "description": "预期请求条件组；requireMatch=true 时作为接口准入门槛（失败按 gateStatus 返回，缺省 400），否则仅用于变体匹配",
         "properties": {
           "query": {
             "type": "array",
@@ -1335,7 +1378,22 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RequestCondition"
-            }
+            },
+            "description": "body 条件行（点路径）；bodyMatch 为 deepEqual / textEqual 时被忽略"
+          },
+          "bodyMatch": {
+            "type": "string",
+            "enum": [
+              "subset",
+              "deepEqual",
+              "textEqual"
+            ],
+            "default": "subset",
+            "description": "body 整体匹配策略（可选）：subset（缺省）=逐条 body 条件按点路径子集匹配（历史语义）；deepEqual=请求体与 bodyRaw 解析出的 JSON 深度相等（字段顺序、空格无关，额外字段会导致不命中，body 条件行被忽略）；textEqual=请求体原文与 bodyRaw 逐字符相等（空格、换行、字段顺序都影响结果，body 条件行被忽略）。非枚举值返回 400"
+          },
+          "bodyRaw": {
+            "type": "string",
+            "description": "期望的请求体文本：deepEqual 时为期望的完整 JSON 文本（须为合法 JSON），textEqual 时为期望原文；subset 时忽略且不落库。bodyMatch 为 deepEqual / textEqual 时必须非空，否则 400。原文来源：JSON 请求由请求体解析器顺带捕获，非 JSON 请求单独读取原文；请求体缺失或超过 10MB 时该条件按「请求体原文不可用」失败"
           }
         }
       },
@@ -1456,7 +1514,17 @@
           },
           "requireMatch": {
             "type": "boolean",
-            "description": "true 时所有请求必须满足 request 条件，否则 400"
+            "description": "true 时所有请求必须满足 request 条件（请求准入门槛），否则按 gateStatus 返回（缺省 400）；优先于任何变体，CRUD 路由同样生效"
+          },
+          "gateStatus": {
+            "type": "integer",
+            "enum": [
+              400,
+              404,
+              422
+            ],
+            "default": 400,
+            "description": "请求准入（requireMatch）失败时返回的状态码（可选，缺省 400）：404=隐藏接口、422=语义不可处理；路由级认证失败仍是 401（优先于准入）。也可作为 PUT /__polymock/routes/{id} 的单独 patch 字段，非 400 / 404 / 422 返回 400"
           },
           "variants": {
             "type": "array",
@@ -1506,7 +1574,7 @@
         }
       },
       "RoutePatch": {
-        "description": "PATCH 语义：仅提供需要修改的字段",
+        "description": "PATCH 语义：仅提供需要修改的字段；gateStatus 等行为字段可单独提交。未提供任何可更新字段时返回 400，错误信息列出可更新字段（含 gateStatus）",
         "allOf": [
           {
             "$ref": "#/components/schemas/RoutePayload"
@@ -1554,6 +1622,15 @@
           },
           "requireMatch": {
             "type": "boolean"
+          },
+          "gateStatus": {
+            "type": "integer",
+            "enum": [
+              400,
+              404,
+              422
+            ],
+            "description": "请求准入（requireMatch）失败时返回的状态码；未配置时按 400 处理"
           },
           "auth": {
             "$ref": "#/components/schemas/RouteAuth"

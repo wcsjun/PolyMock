@@ -322,6 +322,212 @@ describe('createApp 集成测试', () => {
     expect(await res.json()).toEqual({ loose: true });
   });
 
+  it('请求条件：match 操作符（存在 / 非空 / 正则）按显式语义匹配', async () => {
+    await registerRoute({
+      name: '操作符接口',
+      method: 'GET',
+      path: '/api/operators',
+      request: {
+        query: [
+          { key: 'tenantId', value: '', match: 'exists' },
+          { key: 'region', value: '^cn-\\w+$', match: 'regex' },
+          { key: 'note', value: '', match: 'nonEmpty', required: false },
+        ],
+      },
+      requireMatch: true,
+      response: { status: 200, body: { ok: true } },
+    });
+
+    /* 存在：空字符串也算存在 */
+    const hit = await fetch(`${server.baseUrl}/api/operators?tenantId=&region=cn-north`);
+    expect(hit.status).toBe(200);
+    expect(await hit.json()).toEqual({ ok: true });
+
+    const missing = await fetch(`${server.baseUrl}/api/operators?region=cn-north`);
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: string }).error).toContain('tenantId');
+
+    const badRegex = await fetch(`${server.baseUrl}/api/operators?tenantId=1&region=us-east`);
+    expect(badRegex.status).toBe(400);
+    expect(((await badRegex.json()) as { error: string }).error).toContain('正则');
+
+    /* 非空：携带但为空串仍不通过；完全不携带则按选填放行 */
+    const emptyValue = await fetch(`${server.baseUrl}/api/operators?tenantId=1&region=cn-north&note=`);
+    expect(emptyValue.status).toBe(400);
+    expect(((await emptyValue.json()) as { error: string }).error).toContain('note');
+    expect((await fetch(`${server.baseUrl}/api/operators?tenantId=1&region=cn-north&note=x`)).status).toBe(200);
+  });
+
+  it('请求条件：match=equals 时空串表示「等于空字符串」，与无操作符的历史语义区分', async () => {
+    await registerRoute({
+      name: '显式等值接口',
+      method: 'GET',
+      path: '/api/explicit-equals',
+      request: { query: [{ key: 'flag', value: '', match: 'equals' }] },
+      requireMatch: true,
+      response: { status: 200, body: { mode: 'explicit' } },
+    });
+    await registerRoute({
+      name: '历史语义接口',
+      method: 'GET',
+      path: '/api/legacy-empty',
+      request: { query: [{ key: 'flag', value: '' }] },
+      requireMatch: true,
+      response: { status: 200, body: { mode: 'legacy' } },
+    });
+
+    /* 显式等于空串：flag= 命中，flag=x 不命中 */
+    expect((await fetch(`${server.baseUrl}/api/explicit-equals?flag=`)).status).toBe(200);
+    expect((await fetch(`${server.baseUrl}/api/explicit-equals?flag=x`)).status).toBe(400);
+    /* 历史语义：无 match 时空串 value 只要求存在 */
+    expect((await fetch(`${server.baseUrl}/api/legacy-empty?flag=x`)).status).toBe(200);
+    expect((await fetch(`${server.baseUrl}/api/legacy-empty`)).status).toBe(400);
+  });
+
+  it('请求准入：gateStatus 控制失败码（404 隐藏接口 / 422），缺省 400 且 PUT 可改回', async () => {
+    await registerRoute({
+      name: '隐藏接口',
+      method: 'GET',
+      path: '/api/hidden',
+      request: { headers: [{ key: 'X-Token', value: 'abc' }] },
+      requireMatch: true,
+      gateStatus: 404,
+      response: { status: 200, body: { hidden: true } },
+    });
+    const hidden = await fetch(`${server.baseUrl}/api/hidden`);
+    expect(hidden.status).toBe(404);
+    expect(((await hidden.json()) as { error: string }).error).toContain('请求条件不满足');
+    const visible = await fetch(`${server.baseUrl}/api/hidden`, { headers: { 'X-Token': 'abc' } });
+    expect(visible.status).toBe(200);
+
+    const id422 = await registerRoute({
+      name: '422 接口',
+      method: 'GET',
+      path: '/api/unprocessable',
+      request: { query: [{ key: 'id', value: '1' }] },
+      requireMatch: true,
+      gateStatus: 422,
+      response: { status: 200, body: { ok: true } },
+    });
+    const unprocessable = await fetch(`${server.baseUrl}/api/unprocessable?id=2`);
+    expect(unprocessable.status).toBe(422);
+    expect(((await unprocessable.json()) as { error: string }).error).toContain('请求条件不满足');
+
+    const put = await fetch(`${server.baseUrl}/__polymock/routes/${id422}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ gateStatus: 400 }),
+    });
+    expect(put.status).toBe(200);
+    expect(((await put.json()) as { route: { gateStatus: number } }).route.gateStatus).toBe(400);
+    expect((await fetch(`${server.baseUrl}/api/unprocessable?id=2`)).status).toBe(400);
+  });
+
+  it('body 匹配策略：deepEqual 整体 JSON 深度相等（字段顺序无关，缺字段/多字段均不命中）', async () => {
+    await registerRoute({
+      name: '完整 JSON 匹配',
+      method: 'POST',
+      path: '/api/deep-body',
+      request: { bodyMatch: 'deepEqual', bodyRaw: '{"status":"PAID","orderId":"1001"}' },
+      requireMatch: true,
+      response: { status: 200, body: { matched: 'deep' } },
+    });
+    const post = (body: string) =>
+      fetch(`${server.baseUrl}/api/deep-body`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+
+    const orderChanged = await post(JSON.stringify({ orderId: '1001', status: 'PAID' }));
+    expect(orderChanged.status).toBe(200);
+    expect(await orderChanged.json()).toEqual({ matched: 'deep' });
+
+    const extraField = await post(JSON.stringify({ orderId: '1001', status: 'PAID', extra: 1 }));
+    expect(extraField.status).toBe(400);
+    expect(((await extraField.json()) as { error: string }).error).toContain('完整 JSON');
+
+    const missingField = await post(JSON.stringify({ orderId: '1001' }));
+    expect(missingField.status).toBe(400);
+  });
+
+  it('body 匹配策略：textEqual 按原文逐字符比对（空格与字段顺序都影响结果）', async () => {
+    await registerRoute({
+      name: '原文匹配',
+      method: 'POST',
+      path: '/api/raw-body',
+      request: { bodyMatch: 'textEqual', bodyRaw: '{"status":"PAID","orderId":"1001"}' },
+      requireMatch: true,
+      response: { status: 200, body: { matched: 'raw' } },
+    });
+    const post = (body: string) =>
+      fetch(`${server.baseUrl}/api/raw-body`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+
+    const exact = await post('{"status":"PAID","orderId":"1001"}');
+    expect(exact.status).toBe(200);
+    expect(await exact.json()).toEqual({ matched: 'raw' });
+
+    const spaced = await post('{ "status": "PAID", "orderId": "1001" }');
+    expect(spaced.status).toBe(400);
+    expect(((await spaced.json()) as { error: string }).error).toContain('原文');
+
+    /* 语义上等价的 JSON 顺序不同 → 原文不相等 */
+    expect((await post('{"orderId":"1001","status":"PAID"}')).status).toBe(400);
+  });
+
+  it('body 匹配策略：textEqual 支持非 JSON 请求体（原文捕获不改动既有解析行为）', async () => {
+    await registerRoute({
+      name: '文本原文匹配',
+      method: 'POST',
+      path: '/api/raw-text',
+      request: { bodyMatch: 'textEqual', bodyRaw: 'hello=world' },
+      requireMatch: true,
+      response: { status: 200, body: { matched: 'text' } },
+    });
+    const post = (body: string) =>
+      fetch(`${server.baseUrl}/api/raw-text`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body });
+
+    const hit = await post('hello=world');
+    expect(hit.status).toBe(200);
+    expect(await hit.json()).toEqual({ matched: 'text' });
+    expect((await post('hello=world2')).status).toBe(400);
+  });
+
+  it('管理 API：match / bodyMatch / bodyRaw / gateStatus 不合法时返回 400', async () => {
+    const post = (payload: Record<string, unknown>) =>
+      fetch(`${server.baseUrl}/__polymock/routes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+    const badMatch = await post({
+      name: '坏操作符',
+      method: 'GET',
+      path: '/api/bad-match',
+      request: { query: [{ key: 'a', value: 'b', match: 'contains' }] },
+    });
+    expect(badMatch.status).toBe(400);
+    expect(((await badMatch.json()) as { error: string }).error).toContain('match');
+
+    const badMode = await post({ name: '坏策略', method: 'POST', path: '/api/bad-mode', request: { bodyMatch: 'fuzzy' } });
+    expect(badMode.status).toBe(400);
+    expect(((await badMode.json()) as { error: string }).error).toContain('bodyMatch');
+
+    const badJson = await post({
+      name: '坏期望 JSON',
+      method: 'POST',
+      path: '/api/bad-json',
+      request: { bodyMatch: 'deepEqual', bodyRaw: '{bad' },
+    });
+    expect(badJson.status).toBe(400);
+    expect(((await badJson.json()) as { error: string }).error).toContain('bodyRaw');
+
+    const missingRaw = await post({ name: '缺期望值', method: 'POST', path: '/api/missing-raw', request: { bodyMatch: 'textEqual' } });
+    expect(missingRaw.status).toBe(400);
+    expect(((await missingRaw.json()) as { error: string }).error).toContain('bodyRaw');
+
+    const badGate = await post({ name: '坏失败码', method: 'GET', path: '/api/bad-gate', gateStatus: 500,'requireMatch': true, response: { status: 200, body: {} } });
+    expect(badGate.status).toBe(400);
+    expect(((await badGate.json()) as { error: string }).error).toContain('gateStatus');
+  });
+
   it('响应变体：按 header 命中对应变体，全不命中回退默认响应', async () => {
     const variants: VariantInput[] = [
       { name: '管理员视角', match: { headers: [{ key: 'X-Role', value: 'admin' }] }, response: { body: { role: 'admin' } } },

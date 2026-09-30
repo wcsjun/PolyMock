@@ -11,6 +11,7 @@ import {
   buildFetchSnippet,
   bodyRowsToJsonValue,
   buildRouteRequest,
+  conditionSummary,
   jsonValueToBodyRows,
   loadDrawerWidth,
   parseSequenceDraft,
@@ -24,9 +25,9 @@ import {
 } from './utils';
 import type { ConditionRow, Route } from './types';
 
-/** 快捷构造条件行：缺省 type=string / required=true / enabled=true */
+/** 快捷构造条件行：缺省 type=string / required=true / enabled=true / match=equals */
 function row(overrides: Partial<ConditionRow> & Pick<ConditionRow, 'key' | 'value'>): ConditionRow {
-  return { type: 'string', required: true, enabled: true, ...overrides };
+  return { type: 'string', required: true, enabled: true, match: 'equals', ...overrides };
 }
 
 describe('buildCurl / buildFetchSnippet', () => {
@@ -59,7 +60,7 @@ describe('serviceDisplaySuffix 服务分组展示后缀', () => {
 });
 
 describe('buildRouteRequest ↔ splitRouteRequest', () => {
-  it('过滤未启用与空 key 行；type=string / required=true 缺省值不写入', () => {
+  it('过滤未启用与空 key 行；操作符显式写入，type=string / required=true 缺省值不写入', () => {
     const request = buildRouteRequest(
       [
         row({ key: 'page', value: '1', type: 'number', required: false }),
@@ -70,15 +71,48 @@ describe('buildRouteRequest ↔ splitRouteRequest', () => {
       [],
     );
     expect(request).toEqual({
-      query: [{ key: 'page', value: '1', type: 'number', required: false }],
-      headers: [{ key: 'X-Role', value: 'admin' }],
+      query: [{ key: 'page', value: '1', match: 'equals', type: 'number', required: false }],
+      headers: [{ key: 'X-Role', value: 'admin', match: 'equals' }],
     });
   });
 
-  it('三组全空返回 undefined；undefined 拆解为空数组', () => {
+  it('操作符写入：存在 / 非空 / 正则不携带 type，正则值原样保留', () => {
+    const request = buildRouteRequest(
+      [
+        row({ key: 'tenantId', value: '', match: 'exists' }),
+        row({ key: 'note', value: '', match: 'nonEmpty', required: false }),
+        row({ key: 'region', value: '^cn-\\w+$', match: 'regex', type: 'number' }),
+      ],
+      [],
+      [],
+    );
+    expect(request).toEqual({
+      query: [
+        { key: 'tenantId', value: '', match: 'exists' },
+        { key: 'note', value: '', match: 'nonEmpty', required: false },
+        { key: 'region', value: '^cn-\\w+$', match: 'regex' },
+      ],
+    });
+  });
+
+  it('body 策略：非 subset 时不携带 body 条件行，改为携带 bodyMatch + bodyRaw', () => {
+    const deep = buildRouteRequest([], [], [row({ key: 'status', value: 'PAID' })], 'deepEqual', '{"status":"PAID"}');
+    expect(deep).toEqual({ bodyMatch: 'deepEqual', bodyRaw: '{"status":"PAID"}' });
+
+    /* 原文策略保留空白的原始文本（逐字符比对依赖它） */
+    const raw = buildRouteRequest([], [], [], 'textEqual', '{ "a": 1 }');
+    expect(raw).toEqual({ bodyMatch: 'textEqual', bodyRaw: '{ "a": 1 }' });
+
+    /* 非 subset 但未填写期望值：退回「无 request」 */
+    expect(buildRouteRequest([], [], [], 'textEqual', '   ')).toBeUndefined();
+    /* subset 下 bodyRaw 不生效 */
+    expect(buildRouteRequest([], [], [], 'subset', '{"a":1}')).toBeUndefined();
+  });
+
+  it('三组全空返回 undefined；undefined 拆解为空数组与缺省策略', () => {
     expect(buildRouteRequest([], [], [])).toBeUndefined();
     expect(buildRouteRequest([row({ key: 'a', value: '1', enabled: false })], [], [])).toBeUndefined();
-    expect(splitRouteRequest(undefined)).toEqual({ query: [], headers: [], body: [] });
+    expect(splitRouteRequest(undefined)).toEqual({ query: [], headers: [], body: [], bodyMatch: 'subset', bodyRaw: '' });
   });
 
   it('往返：build → split 还原为可编辑行并补全缺省值（enabled=true）', () => {
@@ -93,6 +127,43 @@ describe('buildRouteRequest ↔ splitRouteRequest', () => {
     expect(split.body).toEqual([row({ key: 'id', value: '7', type: 'number' })]);
     // 回填后的行再次 build，与原 request 深度一致（幂等）
     expect(buildRouteRequest(split.query, split.headers, split.body)).toEqual(request);
+  });
+
+  it('回填旧配置（无 match 字段）：空 value 推断为「存在」，其余推断为「等于」', () => {
+    const split = splitRouteRequest({
+      query: [{ key: 'tenantId', value: '' }, { key: 'typed', value: '', type: 'json' }],
+      headers: [{ key: 'X-Token', value: 'abc' }],
+      body: [{ key: 'status', value: 'PAID' }],
+      bodyMatch: 'deepEqual',
+      bodyRaw: '{"status":"PAID"}',
+    });
+    /* 空 value 一律按历史语义还原为「存在」（即使旧数据带了 type） */
+    expect(split.query).toEqual([row({ key: 'tenantId', value: '', match: 'exists' }), row({ key: 'typed', value: '', type: 'json', match: 'exists' })]);
+    expect(split.headers).toEqual([row({ key: 'X-Token', value: 'abc' })]);
+    expect(split.body).toEqual([row({ key: 'status', value: 'PAID' })]);
+    expect(split.bodyMatch).toBe('deepEqual');
+    expect(split.bodyRaw).toBe('{"status":"PAID"}');
+  });
+});
+
+describe('conditionSummary 条件摘要', () => {
+  it('显式操作符按语义展示', () => {
+    expect(
+      conditionSummary({
+        query: [
+          { key: 'tenantId', value: '', match: 'exists' },
+          { key: 'note', value: '', match: 'nonEmpty' },
+          { key: 'region', value: '^cn-', match: 'regex' },
+          { key: 'flag', value: '', match: 'equals' },
+        ],
+      }),
+    ).toEqual(['Query tenantId 存在', 'Query note 非空', 'Query region ≈ /^cn-/', 'Query flag=（等于）']);
+  });
+
+  it('body 策略摘要取代 body 条件行；无条件时给出兜底文案', () => {
+    expect(conditionSummary({ bodyMatch: 'deepEqual', bodyRaw: '{"a":1}' })).toEqual(['Body 完整 JSON 相等']);
+    expect(conditionSummary({ bodyMatch: 'textEqual', bodyRaw: 'x', body: [{ key: 'a', value: '1' }] })).toEqual(['Body 原文全文相等']);
+    expect(conditionSummary(undefined)).toEqual(['无条件（总是命中）']);
   });
 });
 

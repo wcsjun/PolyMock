@@ -474,6 +474,7 @@ function onSidebarRzDown(event: PointerEvent) {
         :editing="editingRoute"
         :mode="mode"
         :notify="showToast"
+        :active-variant="globalVariant"
         @changed="onFormChanged"
         @cancel-edit="closeDrawer"
       />

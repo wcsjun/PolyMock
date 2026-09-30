@@ -1,5 +1,15 @@
 import type { CSSProperties } from 'vue';
-import type { ConditionRow, ConditionType, PolyMockMode, RequestCondition, ResponseHeader, Route, RouteRequest } from './types';
+import type {
+  BodyMatchMode,
+  ConditionMatch,
+  ConditionRow,
+  ConditionType,
+  PolyMockMode,
+  RequestCondition,
+  ResponseHeader,
+  Route,
+  RouteRequest,
+} from './types';
 
 export const METHOD_COLORS: Record<string, string> = {
   GET: '#0e9f5d',
@@ -49,21 +59,55 @@ export function formatBody(body: unknown): string {
   return JSON.stringify(body, null, 2);
 }
 
-/** 表格行 → 提交条件：过滤未启用与空 key 行；type=string、required=true 为缺省值不写入 */
+/** 匹配操作符的界面文案（ConditionTable / 摘要共用） */
+export const CONDITION_MATCH_LABELS: ReadonlyArray<{ value: ConditionMatch; label: string; hint: string }> = [
+  { value: 'exists', label: '存在', hint: '只要求参数存在，空字符串也算存在；无需填写值' },
+  { value: 'equals', label: '等于', hint: '按类型等值比对；值留空表示「等于空字符串」' },
+  { value: 'nonEmpty', label: '非空', hint: '参数存在且不是空字符串 / null；无需填写值' },
+  { value: 'regex', label: '正则', hint: '期望值为正则表达式，匹配字符串化后的实际值' },
+];
+
+/** body 匹配策略的界面文案 */
+export const BODY_MATCH_LABELS: ReadonlyArray<{ value: BodyMatchMode; label: string; hint: string }> = [
+  { value: 'subset', label: '字段包含（默认）', hint: '只要请求 body 包含配置的字段和值即可命中；适合只关心少数业务字段' },
+  { value: 'deepEqual', label: '完整 JSON 相等', hint: '请求体必须是完整 JSON 深度相等；空格与字段顺序不影响，额外字段会导致不命中' },
+  { value: 'textEqual', label: '原文全文相等', hint: '请求体按原始文本逐字符比较；空格、换行和字段顺序都会影响结果' },
+];
+
+export function conditionMatchLabel(match: ConditionMatch): string {
+  return CONDITION_MATCH_LABELS.find((item) => item.value === match)?.label ?? match;
+}
+
+export function bodyMatchLabel(mode: BodyMatchMode): string {
+  return BODY_MATCH_LABELS.find((item) => item.value === mode)?.label ?? mode;
+}
+
+/** 期望值是否为合法正则（正则操作符的行校验用） */
+export function isValidRegex(pattern: string): boolean {
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 表格行 → 提交条件：过滤未启用与空 key 行；操作符始终显式写入（equals 为空串时语义不再依赖旧约定） */
 export function rowsToConditions(rows: ConditionRow[]): RequestCondition[] {
   const list: RequestCondition[] = [];
   for (const row of rows) {
     const key = row.key.trim();
     if (!row.enabled || !key) continue;
-    const condition: RequestCondition = { key, value: row.value };
-    if (row.type !== 'string') condition.type = row.type;
+    const condition: RequestCondition = { key, value: row.value, match: row.match };
+    /* 类型仅在「等于」下有意义：存在 / 非空 / 正则不写入，保持配置最小 */
+    if (row.match === 'equals' && row.type !== 'string') condition.type = row.type;
     if (!row.required) condition.required = false;
     list.push(condition);
   }
   return list;
 }
 
-/** 提交条件 → 表格行（编辑回填，缺省值补全） */
+/** 提交条件 → 表格行（编辑回填）：显式操作符优先，缺省按历史语义推断（空值 = 存在，其余 = 等于） */
 export function conditionsToRows(conditions?: RequestCondition[]): ConditionRow[] {
   return (conditions ?? []).map((condition) => ({
     key: condition.key,
@@ -71,44 +115,59 @@ export function conditionsToRows(conditions?: RequestCondition[]): ConditionRow[
     type: condition.type ?? 'string',
     required: condition.required !== false,
     enabled: true,
+    match: condition.match ?? (condition.value === '' ? 'exists' : 'equals'),
   }));
 }
 
-/** 过滤空 key 行后组装 RouteRequest；三组全空时返回 undefined */
+/**
+ * 组装 RouteRequest；三组条件全空且未配置 body 策略时返回 undefined。
+ * bodyMatch 非 subset 时 body 条件行不参与匹配（后端同样忽略），提交时不携带。
+ */
 export function buildRouteRequest(
   query: ConditionRow[],
   headers: ConditionRow[],
   body: ConditionRow[],
+  bodyMatch: BodyMatchMode = 'subset',
+  bodyRaw = '',
 ): RouteRequest | undefined {
   const q = rowsToConditions(query);
   const h = rowsToConditions(headers);
-  const b = rowsToConditions(body);
-  if (!q.length && !h.length && !b.length) return undefined;
+  const b = bodyMatch === 'subset' ? rowsToConditions(body) : [];
+  const extended = bodyMatch !== 'subset' && bodyRaw.trim() !== '';
+  if (!q.length && !h.length && !b.length && !extended) return undefined;
   const request: RouteRequest = {};
   if (q.length) request.query = q;
   if (h.length) request.headers = h;
   if (b.length) request.body = b;
+  if (extended) {
+    request.bodyMatch = bodyMatch;
+    request.bodyRaw = bodyRaw;
+  }
   return request;
 }
 
-/** 拆解 RouteRequest 为三组可编辑行（编辑回填用） */
+/** 拆解 RouteRequest 为三组可编辑行 + body 策略（编辑回填用） */
 export function splitRouteRequest(request?: RouteRequest): {
   query: ConditionRow[];
   headers: ConditionRow[];
   body: ConditionRow[];
+  bodyMatch: BodyMatchMode;
+  bodyRaw: string;
 } {
   return {
     query: conditionsToRows(request?.query),
     headers: conditionsToRows(request?.headers),
     body: conditionsToRows(request?.body),
+    bodyMatch: request?.bodyMatch ?? 'subset',
+    bodyRaw: request?.bodyRaw ?? '',
   };
 }
 
 /* ---------- Body 页签的 JSON 编辑器互转（Postman 风格） ---------- */
 
-/** 条件行 → 期望 JSON 子集：启用行按点路径展开成嵌套对象，叶子值按类型还原 */
+/** 条件行 → 期望 JSON 子集：启用且操作符为「等于」的行按点路径展开成嵌套对象，叶子值按类型还原（存在 / 非空 / 正则无法用 JSON 值表达，跳过） */
 export function bodyRowsToJsonValue(rows: ConditionRow[]): unknown {
-  const enabled = rows.filter((row) => row.enabled && row.key.trim());
+  const enabled = rows.filter((row) => row.enabled && row.key.trim() && row.match === 'equals');
   const root: Record<string, unknown> = {};
   for (const row of enabled) {
     const parts = row.key.trim().split('.');
@@ -165,25 +224,35 @@ export function jsonValueToBodyRows(value: unknown): ConditionRow[] {
     } else {
       text = String(node);
     }
-    rows.push({ key: path, value: text, type, required: true, enabled: true });
+    rows.push({ key: path, value: text, type, required: true, enabled: true, match: 'equals' });
   };
   walk(value, '');
   return rows;
 }
 
-/** 条件摘要文案，如「Header X-Role=admin」；用于卡片变体列表 */export function conditionSummary(request?: RouteRequest): string[] {
+/**
+ * 条件摘要文案，如「Header X-Role=admin（存在）」「Body 完整 JSON 相等」；用于卡片变体列表与准入展示。
+ * 显式操作符（match）优先展示：存在 / 非空 / 正则 / 等于；无操作符时沿用历史展示。
+ */
+export function conditionSummary(request?: RouteRequest): string[] {
   if (!request) return ['无条件（总是命中）'];
   const format = (label: string, condition: RequestCondition): string => {
-    const base = condition.value === '' ? `${label} ${condition.key} 存在` : `${label} ${condition.key}=${condition.value}`;
     const tags: string[] = [];
+    if (condition.match === 'exists') return `${label} ${condition.key} 存在`;
+    if (condition.match === 'nonEmpty') return `${label} ${condition.key} 非空`;
+    if (condition.match === 'regex') return `${label} ${condition.key} ≈ /${condition.value}/`;
+    const base = condition.value === '' && condition.match !== 'equals' ? `${label} ${condition.key} 存在` : `${label} ${condition.key}=${condition.value}`;
     if (condition.type && condition.type !== 'string') tags.push(condition.type);
     if (condition.required === false) tags.push('选填');
+    if (condition.match === 'equals') tags.push('等于');
     return tags.length ? `${base}（${tags.join('·')}）` : base;
   };
   const parts: string[] = [];
   for (const c of request.headers ?? []) parts.push(format('Header', c));
   for (const c of request.query ?? []) parts.push(format('Query', c));
-  for (const c of request.body ?? []) parts.push(format('Body', c));
+  if (request.bodyMatch === 'deepEqual') parts.push('Body 完整 JSON 相等');
+  else if (request.bodyMatch === 'textEqual') parts.push('Body 原文全文相等');
+  else for (const c of request.body ?? []) parts.push(format('Body', c));
   return parts.length ? parts : ['无条件（总是命中）'];
 }
 
