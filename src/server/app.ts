@@ -134,6 +134,14 @@ function gateFailureStatus(route: Route): number {
   return route.gateStatus ?? 400;
 }
 
+/**
+ * 请求准入失败的对外响应文案：404（隐藏接口）时返回与未注册接口完全一致的文案，
+ * 避免暴露接口存在与期望条件（真实原因仍记录在请求日志中）；其余状态码返回真实原因。
+ */
+function gateFailureMessage(route: Route, reason: string, req: express.Request): string {
+  return gateFailureStatus(route) === 404 ? `未注册接口: ${req.method} ${req.path}` : reason;
+}
+
 /** 校验路由级认证（模拟后端鉴权）；通过返回 null，失败返回 401 错误原因 */
 function checkAuth(auth: RouteAuth, req: express.Request): string | null {
   if (auth.type === 'bearer') {
@@ -641,7 +649,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         if (reason) {
           status = gateFailureStatus(route);
           error = `请求条件不满足：${reason}`;
-          res.status(status).json({ ok: false, error });
+          res.status(status).json({ ok: false, error: gateFailureMessage(route, error, req) });
           writeLog();
           return;
         }
@@ -678,7 +686,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     if (!result.ok) {
       status = gateFailureStatus(route);
       error = result.error;
-      res.status(status).json({ ok: false, error: result.error });
+      res.status(status).json({ ok: false, error: gateFailureMessage(route, result.error, req) });
       writeLog();
       return;
     }

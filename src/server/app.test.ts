@@ -396,7 +396,8 @@ describe('createApp 集成测试', () => {
     });
     const hidden = await fetch(`${server.baseUrl}/api/hidden`);
     expect(hidden.status).toBe(404);
-    expect(((await hidden.json()) as { error: string }).error).toContain('请求条件不满足');
+    /* 404（隐藏接口）语义：对外 body 与未注册接口完全一致，不暴露接口存在与期望条件 */
+    expect(((await hidden.json()) as { error: string }).error).toBe('未注册接口: GET /api/hidden');
     const visible = await fetch(`${server.baseUrl}/api/hidden`, { headers: { 'X-Token': 'abc' } });
     expect(visible.status).toBe(200);
 
