@@ -116,7 +116,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 ### 接口管理
 
 - **多服务分组**：除主端口上的默认服务外，可创建多个服务分组——端口模式下各自独立端口监听，路径模式下经主端口 `/{basePath}` 前缀分发（见「运行模式」）
-- **Web 控制台**：抽屉式表单新增/编辑接口，条件用 Postman 风格表格编辑（Body 支持表格 ⇄ JSON 双向互转）
+- **Web 控制台**：抽屉式表单新增/编辑接口，按「基本信息 / 请求准入 / 响应分支 / 高级选项 / 匹配预览」五段卡片组织，条件用 Postman 风格表格编辑（Body 支持表格 ⇄ JSON 双向互转，并可选字段包含 / 完整 JSON 相等 / 原文全文相等三种匹配策略）
 - **接口启用/禁用**：禁用后视为未注册（配置了代理时穿透到真实后端）
 - **删除确认**：删除服务或接口均弹出确认提示，防止误删
 
@@ -124,15 +124,17 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 - **路径匹配**：精确路径 + `:param` 路径参数段（如 `/api/users/:id`）；形状冲突（含参数段互撞）在注册时返回 409
 - **条件维度**：query 参数、请求头（大小写不敏感）、JSON body 点路径（如 `user.id`）三组条件
-- **比对类型**：`string`（缺省，字符串化比对）/ `number` / `boolean` / `json`（深度相等）/ `array`（包含匹配，实际数组需包含期望 JSON 数组的全部元素，无序）；期望值为空串表示仅要求 key 存在
-- **必填/选填**：条件默认必填，`required: false` 时 key 缺失视为通过（存在才比对）
-- **requireMatch 准入门槛**：开启后所有请求必须满足接口的 `request` 条件，否则返回 400 并说明不匹配原因（优先于任何变体）
+- **比对类型**：`string`（缺省，字符串化比对）/ `number` / `boolean` / `json`（深度相等）/ `array`（包含匹配，实际数组需包含期望 JSON 数组的全部元素，无序）；不传 `match` 操作符时，期望值为空串表示仅要求 key 存在（见下条）
+- **必填/选填**：条件默认必填，`required: false` 时 key 缺失视为通过（存在才比对）；在显式操作符（`match`）下同样生效
+- **匹配操作符 `match`**（可选）：`exists` = 只要求 key 存在（空字符串也算存在，`value` 被忽略）/ `equals` = 显式等值比对（此时 `value: ""` 表示「等于空字符串」，比对方式仍由 `type` 决定）/ `nonEmpty` = key 存在且不是空字符串、`null` / `regex` = `value` 为正则表达式，匹配字符串化后的实际值（正则非法时该条件失败，错误信息含「不是合法正则」）。不传 `match` 时保持历史语义（`required` 控制 key 缺失是否通过、`value` 为空串表示「仅要求存在」），旧配置无需迁移
+- **requireMatch 准入门槛（请求准入）**：开启后所有请求必须满足接口的 `request` 条件，否则按 `gateStatus` 返回（缺省 `400`，可选 `404` 隐藏接口 / `422`）；`400` / `422` 会说明不匹配原因，`404` 时对外 body 与未注册接口完全一致（不暴露接口存在与期望条件，真实原因仍记录在请求日志）；该门槛优先于任何变体（响应分支），普通路由与 CRUD 路由都生效，路由级认证的 401 优先于它
+- **请求体匹配策略 `bodyMatch` / `bodyRaw`**（可选）：`subset`（缺省）逐条 `request.body` 条件按点路径子集匹配；`deepEqual` 要求请求体与 `bodyRaw` 解析出的 JSON 深度相等（字段顺序、空格无关，额外字段会导致不命中）；`textEqual` 要求请求体原文与 `bodyRaw` 逐字符相等（空格、换行、字段顺序都影响结果）。`deepEqual` / `textEqual` 下 `request.body` 条件行被忽略。请求体原文来源：JSON 请求由请求体解析器顺带捕获，非 JSON 请求单独读取原文（不改变既有解析/代理行为）；请求体缺失或超过 10MB 时该条件按「请求体原文不可用」失败。`renderRequest` 渲染的是解析后的 body，因此 `textEqual` 比对的是客户端原始文本
 - **请求体模板渲染 `renderRequest`**：请求体字符串里的模板占位符（与响应模板同一套，见「动态响应模板」）会**在条件匹配之前**展开，展开结果参与 requireMatch / 变体条件匹配、响应模板的 `{{body.*}}` 与请求日志预览。因此调用方可以传入 `{"scene":"{{query.scene}}"}` 这类请求体，由请求参数决定命中哪个场景，一份配置服务多种输入；`{{body.其他字段}}` 读取的是**原始请求体**（同一遍渲染，不级联）。**默认开启**（不含占位符的请求体渲染结果与原值相同，等价于无操作），需要让请求体按客户端原文参与匹配时显式传 `false`；取不到值的占位符原样保留，`{{$id}}` 与响应模板共用同一路由级自增计数。仅在命中已注册路由时生效（未命中会走代理转发，转发的是原始请求体）
 - **路由级认证**：`auth` 配置后模拟后端鉴权，未携带正确凭证返回 401；支持 `apikey`（自定义 header 携带密钥，缺省 `X-API-Key`，可改 header 名）与 `bearer`（`Authorization: Bearer <token>`，401 时附 `WWW-Authenticate: Bearer`）；401 优先于 requireMatch 门槛，CRUD 接口同样生效
 
 ### 响应能力
 
-- **响应场景（变体）**：同一接口挂多个带名字的变体，按数组顺序匹配，第一个条件全部通过的生效，全不命中走默认响应
+- **响应场景（变体 / 控制台中的「响应分支」）**：同一接口挂多个带名字的变体，按数组顺序匹配，第一个条件全部通过的生效，全不命中走默认响应；默认响应是兜底分支、本身不写条件，「所有请求都必须满足」的共享条件请配置到请求准入（`requireMatch` / `request`）
 - **序列响应**：按命中次序循环返回一组响应（如「成功 → 成功 → 失败」），优先于场景集/变体/默认响应
 - **全局场景集**：设置 `activeVariant` 后，所有拥有同名变体的接口强制命中该变体（绕过其条件），一键切换全局场景
 - **动态响应模板**：响应体字符串中支持 `{{query.x}}`、`{{header.x}}`、`{{body.x}}`（点路径）、`{{params.x}}`（路径参数）、`{{$id}}`（路由级自增）、`{{$now}}`（ISO 时间）、`{{$int(a,b)}}`（闭区间随机整数），以及内置假数据 `{{$name}}` `{{$ename}}` `{{$email}}` `{{$phone}}` `{{$city}}` `{{$word}}` `{{$bool}}`；取不到值的占位符原样保留
@@ -141,7 +143,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 - **延迟/抖动/故障注入**：`delayMs`（0-60000 固定延迟）+ `jitterMs`（随机抖动上限），`failureRate`（0-100%）按概率返回 500
 - **格式化与即时校验**：body 一键格式化，JSON 模式下失焦即时校验并标红（声明非 JSON Content-Type 时跳过校验），提交时后端再次校验
 
-响应解析优先级：路由级认证（401）→ `requireMatch` 准入门槛 → 序列响应 → 全局场景集 → 条件变体 → 默认响应。
+响应解析优先级：路由级认证（401）→ 请求准入（`requireMatch`，失败按 `gateStatus` 返回，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。
 
 ### 有状态 CRUD
 
@@ -181,7 +183,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 | 视图 | 说明 |
 | --- | --- |
-| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态，头部徽标快捷设置代理穿透）与接口卡片（方法色标、条件摘要、变体列表）；CRUD 路由按集合分组展示（组头可弹窗查看集合数据、整集合删除）；抽屉式表单编辑接口的条件、变体、序列响应、延迟/抖动/故障注入、CRUD 开关（开启后可一键创建配套的列表/创建/详情/更新/删除路由）；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
+| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态，头部徽标快捷设置代理穿透）与接口卡片（方法色标、条件摘要、变体列表）；CRUD 路由按集合分组展示（组头可弹窗查看集合数据、整集合删除）；「新增/编辑接口」抽屉重构为五段卡片——**基本信息 / 请求准入 / 响应分支 / 高级选项 / 匹配预览**：「请求准入」把原先挂在默认响应上的条件独立成共享门槛（开关即 `requireMatch`，失败码下拉即 `gateStatus`），条件行为「来源 / 参数名 / 操作符（存在·等于·非空·正则）/ 值」，类型下拉仅在「等于」时出现，保留启用与必填勾选，Body 支持字段包含 / 完整 JSON 相等 / 原文全文相等三种策略；「响应分支」按 Tab 编辑（默认响应为 fallback、不写条件，分支标签可拖动调整匹配顺序，删除按钮在分支框体右上角），自定义响应头收进「高级选项」的「启用自定义响应头」开关（认证、延迟/抖动/故障率、序列响应、CRUD 开关同在该段，CRUD 开启后可一键创建配套的列表/创建/详情/更新/删除路由）；「匹配预览」是纯前端本地推演（路径 → 认证 → 请求准入 → 序列响应 → 全局场景集 → 分支 → 默认响应），不发送真实请求；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
 | **嵌入测试** | 输入任意页面地址，将其嵌入可拖拽调整宽高的 iframe 容器中（右/下/右下边缘拖拽、一键铺满、新标签页打开），便于在控制台内直接验证页面与 Mock 的联调效果 |
 | **请求日志** | 日志列表与过滤（状态/服务/路径关键字），实时（SSE）/轮询模式徽标，支持重放、复制 curl、清空、把代理条目保存为接口 |
 
@@ -210,6 +212,8 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | GET | `/__polymock/events` | SSE 实时推送请求日志（`event: log`，data 为日志条目 JSON） |
 
 > 设置 `POLYMOCK_ADMIN_TOKEN` 后，以上接口均需携带 `x-polymock-token` 请求头或 `?token=` 查询参数，否则 401。
+
+> 注册/更新接口时的准入字段校验：条件行的 `match`、`request.bodyMatch` 非枚举值返回 400；`gateStatus` 非 `400` / `404` / `422` 返回 400；`bodyMatch` 为 `deepEqual` / `textEqual` 时 `bodyRaw` 必须非空（`deepEqual` 还要求是合法 JSON），否则 400；`bodyMatch` 为 `subset` 时 `bodyRaw` 被忽略且不落库。`PUT /__polymock/routes/:id` 可单独传 `gateStatus`（传 `400` 即复位为缺省），无字段可更新时的 400 文案已包含 `gateStatus`。
 
 ## 配置文件
 
@@ -240,11 +244,17 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
       "path": "/api/users/:id",
       "name": "用户详情",
       "response": { "status": 200, "body": { "id": "{{params.id}}", "name": "{{$name}}" } },
-      "request": { "headers": [{ "key": "X-Token", "value": "", "required": false }] },
-      "requireMatch": false,
+      "request": {
+        "headers": [{ "key": "X-Token", "value": "", "match": "exists", "required": false }],
+        "query": [{ "key": "id", "value": "^\\d+$", "match": "regex" }]
+      },
+      "requireMatch": true,
+      "gateStatus": 422,
       "variants": [
-        { "id": "v-01", "name": "管理员视角", "match": { "headers": [{ "key": "X-Role", "value": "admin" }] },
-          "response": { "status": 200, "body": { "role": "admin" } } }
+        { "id": "v-01", "name": "管理员视角", "match": { "headers": [{ "key": "X-Role", "value": "admin", "match": "equals" }] },
+          "response": { "status": 200, "body": { "role": "admin" } } },
+        { "id": "v-02", "name": "支付回调", "match": { "bodyMatch": "deepEqual", "bodyRaw": "{\"status\":\"PAID\"}" },
+          "response": { "status": 200, "body": { "received": true } } }
       ],
       "sequence": [],
       "disabled": false,
@@ -268,13 +278,13 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；路径模式下非默认服务改由 `basePath` 前缀承载（`port` 不使用，置 `0`）；**`default` 服务的 `port` 即主端口，改后重启生效** |
 | `routes[].method` / `path` | HTTP 方法与路径，path 支持 `:param` 参数段 |
 | `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body`；body 在 JSON 模式严格校验，生效 Content-Type 为非 JSON 时为原样文本 |
-| `routes[].request` / `requireMatch` | 预期请求条件与准入开关 |
-| `routes[].variants[]` | 响应变体：`name` / `match?`（缺省=总是命中）/ `response` |
+| `routes[].request` / `requireMatch` / `gateStatus` | 请求准入：预期请求条件、准入开关与失败状态码（`gateStatus` 缺省 `400`，可选 `404` 隐藏接口 / `422`）。条件行可选 `match` 操作符（`exists` / `equals` / `nonEmpty` / `regex`，缺省沿用历史语义）；body 可整体匹配：`bodyMatch`（`subset` 缺省 / `deepEqual` / `textEqual`）+ `bodyRaw`（`deepEqual` 为期望的完整 JSON 文本、`textEqual` 为期望原文，`subset` 下忽略） |
+| `routes[].variants[]` | 响应变体（控制台的「响应分支」）：`name` / `match?`（缺省=总是命中，条件结构与 `request` 相同）/ `response` |
 | `routes[].sequence[]` | 序列响应：`{ status, body, headers? }` 数组，循环返回 |
 | `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` / `renderRequest` | 行为开关与模拟参数（`renderRequest` = 请求体模板渲染，**缺省开启**，仅显式 `false` 关闭） |
 | `settings.activeVariant` | 全局场景集：非空时同名变体强制命中 |
 
-旧版本配置（缺失 `version` 或 `version: 1`）加载时自动迁移到当前版本，字段保持兼容，无需手动处理。
+旧版本配置（缺失 `version` 或 `version: 1`）加载时自动迁移到当前版本，字段保持兼容，无需手动处理。请求准入相关的新增字段（条件行的 `match`、路由的 `gateStatus`、请求组的 `bodyMatch` / `bodyRaw`）全部可选，旧配置无需迁移，`version` 仍为 `2`。
 
 ## 环境变量
 

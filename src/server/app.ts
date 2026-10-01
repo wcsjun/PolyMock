@@ -83,6 +83,65 @@ function asBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+/* ---------- 请求体原文捕获（body 原文全文比对 textEqual 用） ---------- */
+
+/** 请求体原文捕获上限（与 express.json 的 limit 一致）：超限时放弃捕获，textEqual 按「原文不可用」处理 */
+const RAW_BODY_LIMIT = 10 * 1024 * 1024;
+
+/** 挂载在 Express 请求上的原文载体（JSON 由 express.json 的 verify 捕获，非 JSON 由下方中间件读取） */
+interface RawBodyCarrier {
+  rawBody?: string;
+}
+
+/**
+ * JSON 请求（express.json 会解析）：借助 verify 顺带记录原文，不影响解析结果。
+ */
+function captureJsonRawBody(req: express.Request, _res: express.Response, buf: Buffer): void {
+  (req as express.Request & RawBodyCarrier).rawBody = buf.toString('utf8');
+}
+
+/**
+ * 非 JSON 请求：express.json 本就不解析这类请求（req.body 保持 undefined），
+ * 这里自行读取原文后放行，因此不改变既有分发/代理行为；仅在确有请求体时记录原文。
+ */
+function captureNonJsonRawBody(req: express.Request, _res: express.Response, next: express.NextFunction): void {
+  const contentType = req.headers['content-type'];
+  if (req.method === 'GET' || req.method === 'HEAD' || (typeof contentType === 'string' && isJsonContentType(contentType))) {
+    next();
+    return;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  req.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > RAW_BODY_LIMIT) {
+      chunks.length = 0;
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (size > 0 && size <= RAW_BODY_LIMIT) {
+      (req as express.Request & RawBodyCarrier).rawBody = Buffer.concat(chunks).toString('utf8');
+    }
+    next();
+  });
+  req.on('error', () => next());
+}
+
+/** 请求准入（requireMatch）失败时返回的状态码：gateStatus 缺省 400（可选 404 隐藏接口 / 422） */
+function gateFailureStatus(route: Route): number {
+  return route.gateStatus ?? 400;
+}
+
+/**
+ * 请求准入失败的对外响应文案：404（隐藏接口）时返回与未注册接口完全一致的文案，
+ * 避免暴露接口存在与期望条件（真实原因仍记录在请求日志中）；其余状态码返回真实原因。
+ */
+function gateFailureMessage(route: Route, reason: string, req: express.Request): string {
+  return gateFailureStatus(route) === 404 ? `未注册接口: ${req.method} ${req.path}` : reason;
+}
+
 /** 校验路由级认证（模拟后端鉴权）；通过返回 null，失败返回 401 错误原因 */
 function checkAuth(auth: RouteAuth, req: express.Request): string | null {
   if (auth.type === 'bearer') {
@@ -101,18 +160,12 @@ function checkAuth(auth: RouteAuth, req: express.Request): string | null {
 }
 
 /**
- * 校验单条条件；返回失败原因，通过返回 null。
- * - key 缺失：required 为 false（选填）时通过，否则失败；
- * - 期望值为空串：仅要求 key 存在（存在性匹配）；
- * - type 决定比对方式：string 字符串化比对（缺省）/ number 数值比对 / boolean 布尔比对 / json 深度相等 /
- *   array 包含匹配（期望值为 JSON 数组字面量，实际数组需包含其全部元素，无序，逐元素深度相等）。
+ * 按 type 比对实际值；返回失败原因，通过返回 null。
+ * - string（缺省）：字符串化比对；
+ * - number：数值比对 / boolean：布尔比对 / json：深度相等 / array：包含匹配（期望值为 JSON 数组字面量，实际数组需包含其全部元素，无序）。
  */
-function checkCondition(cond: RequestCondition, actual: unknown): string | null {
-  if (actual === undefined) {
-    return cond.required === false ? null : `缺少（期望 ${cond.value}）`;
-  }
+function compareByType(cond: RequestCondition, actual: unknown): string | null {
   const expected = cond.value;
-  if (expected === '') return null;
   const shown = actualText(actual) ?? 'undefined';
   const mismatch = `期望 ${expected}，实际 ${shown}`;
   switch (cond.type) {
@@ -157,23 +210,78 @@ function checkCondition(cond: RequestCondition, actual: unknown): string | null 
   }
 }
 
-/** 校验一组条件是否全部满足；返回第一条失败原因（带来源前缀），全部通过返回 null */
-function checkConditions(
+/**
+ * 按显式操作符（cond.match）比对实际值；返回失败原因，通过返回 null。
+ * - exists：key 已确认存在即通过（required: false 的缺失放行在上层已处理）；
+ * - equals：显式等值比对，value 为空串表示「等于空字符串」，比对方式仍由 type 决定；
+ * - nonEmpty：存在且不为空字符串 / null；
+ * - regex：期望值为正则，匹配字符串化后的实际值（非法正则视为条件失败）。
+ */
+function compareByMatch(cond: RequestCondition, actual: unknown): string | null {
+  const expected = cond.value;
+  switch (cond.match) {
+    case 'exists':
+      return null;
+    case 'nonEmpty': {
+      if (actual === null || actualText(actual) === '') return `期望非空值，实际 ${actual === null ? 'null' : '空字符串'}`;
+      return null;
+    }
+    case 'regex': {
+      let pattern: RegExp;
+      try {
+        pattern = new RegExp(expected);
+      } catch {
+        return `期望值不是合法正则：${expected}`;
+      }
+      const text = actualText(actual);
+      return text !== null && pattern.test(text) ? null : `期望匹配正则 ${expected}，实际 ${actualText(actual) ?? 'undefined'}`;
+    }
+    case 'equals':
+      return compareByType(cond, actual);
+    default:
+      return compareByType(cond, actual);
+  }
+}
+
+/**
+ * 校验单条条件；返回失败原因，通过返回 null。
+ * - key 缺失：required 为 false（选填）时通过，否则失败；
+ * - 显式操作符（cond.match）优先：exists / equals / nonEmpty / regex；
+ * - 无操作符时保持历史语义：期望值为空串仅要求 key 存在（存在性匹配），其余按 type 比对。
+ */
+function checkCondition(cond: RequestCondition, actual: unknown): string | null {
+  if (actual === undefined) {
+    return cond.required === false ? null : `缺少（期望 ${cond.value}）`;
+  }
+  if (cond.match) return compareByMatch(cond, actual);
+  const expected = cond.value;
+  if (expected === '') return null;
+  return compareByType(cond, actual);
+}
+
+/** 文本预览：截断到 80 字符并用 JSON 字面量展示（换行/空格可见） */
+function textPreview(text: string): string {
+  const literal = JSON.stringify(text) ?? '';
+  return literal.length > 80 ? `${literal.slice(0, 79)}…` : literal;
+}
+
+/**
+ * 校验 body 条件组；返回失败原因，通过返回 null。
+ * - subset（缺省）：逐条 body 条件按点路径子集匹配（历史语义）；
+ * - deepEqual：请求体与 bodyRaw 解析出的 JSON 深度相等（body 条件行不参与）；
+ * - textEqual：请求体原文与 bodyRaw 逐字符相等（请求体原文由 body 解析中间件捕获）。
+ * bodyMatch 非 subset 且 bodyRaw 为空时视为未配置，不做 body 约束。
+ */
+function checkBodyConditions(
   request: RouteRequest,
-  headers: (key: string) => string | undefined,
-  query: (key: string) => string | undefined,
   jsonBody: () => Record<string, unknown> | undefined,
+  bodyValue: () => unknown,
+  bodyText: () => string | undefined,
 ): string | null {
-  for (const cond of request.headers ?? []) {
-    const reason = checkCondition(cond, headers(cond.key));
-    if (reason) return `请求头 ${cond.key} ${reason}`;
-  }
-  for (const cond of request.query ?? []) {
-    const reason = checkCondition(cond, query(cond.key));
-    if (reason) return `查询参数 ${cond.key} ${reason}`;
-  }
-  const bodyConditions = request.body ?? [];
-  if (bodyConditions.length > 0) {
+  const mode = request.bodyMatch ?? 'subset';
+  if (mode === 'subset') {
+    const bodyConditions = request.body ?? [];
+    if (bodyConditions.length === 0) return null;
     const body = jsonBody();
     if (!body) {
       /* 全部为选填条件时，body 缺失视为字段缺失（逐条按选填语义通过） */
@@ -184,8 +292,40 @@ function checkConditions(
       const reason = checkCondition(cond, lookupPath(body, cond.key));
       if (reason) return `请求体字段 ${cond.key} ${reason}`;
     }
+    return null;
   }
-  return null;
+
+  const expectedRaw = request.bodyRaw ?? '';
+  if (!expectedRaw) return null;
+  if (mode === 'deepEqual') {
+    let expected: unknown;
+    try {
+      expected = JSON.parse(expectedRaw);
+    } catch {
+      return `完整 JSON 期望值不是合法 JSON：${textPreview(expectedRaw)}`;
+    }
+    const actual = bodyValue();
+    if (actual === undefined) return '请求体缺失，无法做完整 JSON 比对';
+    return deepEqual(actual, expected) ? null : `请求体与期望的完整 JSON 不相等（期望 ${textPreview(expectedRaw)}，实际 ${textPreview(JSON.stringify(actual) ?? 'undefined')}）`;
+  }
+  const actualTextBody = bodyText();
+  if (actualTextBody === undefined) return '请求体原文不可用，无法做原文全文比对';
+  return actualTextBody === expectedRaw
+    ? null
+    : `请求体原文与期望不一致（期望 ${textPreview(expectedRaw)}，实际 ${textPreview(actualTextBody)}）`;
+}
+
+/** 校验一组条件是否全部满足；返回第一条失败原因（带来源前缀），全部通过返回 null */
+function checkConditions(request: RouteRequest, sources: ReturnType<typeof conditionSources>): string | null {
+  for (const cond of request.headers ?? []) {
+    const reason = checkCondition(cond, sources.headers(cond.key));
+    if (reason) return `请求头 ${cond.key} ${reason}`;
+  }
+  for (const cond of request.query ?? []) {
+    const reason = checkCondition(cond, sources.query(cond.key));
+    if (reason) return `查询参数 ${cond.key} ${reason}`;
+  }
+  return checkBodyConditions(request, sources.jsonBody, sources.bodyValue, sources.bodyText);
 }
 
 /** 从 Express 请求提取三类比对源 */
@@ -201,12 +341,16 @@ function conditionSources(req: express.Request) {
       const body: unknown = req.body;
       return body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
     },
+    /** 完整请求体值（对象 / 数组 / 标量）：deepEqual 整体比对用 */
+    bodyValue: (): unknown => req.body,
+    /** 请求体原文：textEqual 原文全文比对用（由 body 解析中间件捕获，未捕获时 undefined） */
+    bodyText: (): string | undefined => (req as express.Request & RawBodyCarrier).rawBody,
   };
 }
 
 /**
  * 解析路由最终响应：
- * 1. requireMatch 开启时先做准入校验（route.request），不满足直接 400——该门槛优先于任何变体；
+ * 1. requireMatch 开启时先做准入校验（route.request），不满足直接按 gateStatus（缺省 400）返回——该门槛优先于任何变体；
  * 2. route.sequence 非空时按命中次序循环取响应（优先于场景集/变体/默认）；
  * 3. 全局场景集 activeVariant 非空时：在 variants 中按 name 查找，命中则直接采用其响应（绕过其 match 条件）；
  * 4. 未指定场景集或场景集未命中时按顺序尝试 variants，第一个条件全部通过的生效；
@@ -220,7 +364,7 @@ export function resolveRouteResponse(
   seq?: { take: () => number },
 ): { ok: true; response: RouteResponse; variant: string | null } | { ok: false; error: string } {
   if (route.requireMatch && route.request) {
-    const reason = checkConditions(route.request, sources.headers, sources.query, sources.jsonBody);
+    const reason = checkConditions(route.request, sources);
     if (reason) return { ok: false, error: `请求条件不满足：${reason}` };
   }
   if (route.sequence && route.sequence.length > 0) {
@@ -233,7 +377,7 @@ export function resolveRouteResponse(
     if (forced) return { ok: true, response: forced.response, variant: forced.name };
   }
   for (const variant of route.variants ?? []) {
-    if (!variant.match || checkConditions(variant.match, sources.headers, sources.query, sources.jsonBody) === null) {
+    if (!variant.match || checkConditions(variant.match, sources) === null) {
       return { ok: true, response: variant.response, variant: variant.name };
     }
   }
@@ -501,11 +645,11 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     if (route.crud) {
       const sources = conditionSources(req);
       if (route.requireMatch && route.request) {
-        const reason = checkConditions(route.request, sources.headers, sources.query, sources.jsonBody);
+        const reason = checkConditions(route.request, sources);
         if (reason) {
-          status = 400;
+          status = gateFailureStatus(route);
           error = `请求条件不满足：${reason}`;
-          res.status(400).json({ ok: false, error });
+          res.status(status).json({ ok: false, error: gateFailureMessage(route, error, req) });
           writeLog();
           return;
         }
@@ -540,9 +684,9 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     const result = resolveRouteResponse(route, conditionSources(req), registry.getSettings().activeVariant ?? null, seq);
     matched = { routeId: route.id, variant: null };
     if (!result.ok) {
-      status = 400;
+      status = gateFailureStatus(route);
       error = result.error;
-      res.status(400).json({ ok: false, error: result.error });
+      res.status(status).json({ ok: false, error: gateFailureMessage(route, result.error, req) });
       writeLog();
       return;
     }
@@ -617,7 +761,9 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
 
 export function createApp(registry: RouteRegistry, manager: ServiceManager, options: MainAppOptions): express.Express {
   const app = express();
-  app.use(express.json({ limit: '10mb' }));
+  /* 非 JSON 请求体原文先捕获（JSON 请求由 express.json 的 verify 捕获），供 body 原文全文比对使用 */
+  app.use(captureNonJsonRawBody);
+  app.use(express.json({ limit: '10mb', verify: captureJsonRawBody }));
 
   // 主端口分发共享的计数器与状态存储（key = routeId；CRUD 存储键 = serviceId + 集合路径）
   const deps: DispatchDeps = {
@@ -683,7 +829,9 @@ export function createApp(registry: RouteRegistry, manager: ServiceManager, opti
 
 export function createRouteApp(registry: RouteRegistry, serviceId: string, deps?: DispatchDeps): express.Express {
   const app = express();
-  app.use(express.json({ limit: '10mb' }));
+  /* 与主 App 一致：先捕获非 JSON 请求体原文，再由 express.json 解析 JSON 请求体 */
+  app.use(captureNonJsonRawBody);
+  app.use(express.json({ limit: '10mb', verify: captureJsonRawBody }));
   app.use(createDispatch(registry, serviceId, deps));
   return app;
 }

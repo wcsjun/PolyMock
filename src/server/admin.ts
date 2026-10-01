@@ -6,6 +6,8 @@ import type { RouteRegistry } from '../registry.js';
 import {
   DEFAULT_SERVICE_ID,
   slugifyBasePath,
+  type BodyMatchMode,
+  type ConditionMatch,
   type ConditionType,
   type RequestCondition,
   type RequestLogEntry,
@@ -55,6 +57,15 @@ type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 const CONDITION_TYPES: readonly ConditionType[] = ['string', 'number', 'boolean', 'json', 'array'];
 
+/** 条件匹配操作符（显式语义，可选字段）：exists 存在 / equals 等于 / nonEmpty 非空 / regex 正则 */
+const CONDITION_MATCHES: readonly ConditionMatch[] = ['exists', 'equals', 'nonEmpty', 'regex'];
+
+/** body 匹配策略：subset 字段包含（缺省）/ deepEqual 完整 JSON 相等 / textEqual 原文全文相等 */
+const BODY_MATCH_MODES: readonly BodyMatchMode[] = ['subset', 'deepEqual', 'textEqual'];
+
+/** 请求准入失败码白名单：400（缺省）/ 404（隐藏接口）/ 422 */
+const GATE_STATUSES: readonly number[] = [400, 404, 422];
+
 /** 归一化一组条件行：key trim、过滤空 key 行；数组内对象不合法时报错 */
 function parseConditionList(raw: unknown, label: string): ParseResult<RequestCondition[]> {
   if (!Array.isArray(raw)) return { ok: false, error: `${label} 需为数组` };
@@ -73,29 +84,64 @@ function parseConditionList(raw: unknown, label: string): ParseResult<RequestCon
     if (required !== undefined && typeof required !== 'boolean') {
       return { ok: false, error: `${label} 中 required 需为布尔值` };
     }
+    const match = (row as RequestCondition).match;
+    if (match !== undefined && !CONDITION_MATCHES.includes(match)) {
+      return { ok: false, error: `${label} 中 match 需为 ${CONDITION_MATCHES.join(' / ')}` };
+    }
     const trimmed = key.trim();
     if (trimmed) {
       const condition: RequestCondition = { key: trimmed, value };
       if (type !== undefined && type !== 'string') condition.type = type;
       if (required === false) condition.required = false;
+      if (match !== undefined) condition.match = match;
       list.push(condition);
     }
   }
   return { ok: true, value: list };
 }
 
-/** 解析请求条件组（query / headers / body）；未提供或全空时返回空对象 */
+/**
+ * 解析请求条件组（query / headers / body + body 匹配策略）；未提供或全空时返回空对象。
+ * bodyMatch 非 subset 时要求 bodyRaw 一并提供：deepEqual 需为合法 JSON、textEqual 需为非空原文；
+ * subset（缺省）下不保留 bodyRaw，避免留下不生效的配置。
+ */
 function parseRouteRequest(raw: unknown): ParseResult<RouteRequest> {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, error: 'request 需为对象（可含 query / headers / body 数组）' };
   }
+  const source = raw as Record<string, unknown>;
   const result: RouteRequest = {};
   for (const field of ['query', 'headers', 'body'] as const) {
-    const rawList = (raw as Record<string, unknown>)[field];
+    const rawList = source[field];
     if (rawList === undefined) continue;
     const parsed = parseConditionList(rawList, `request.${field}`);
     if (!parsed.ok) return parsed;
     if (parsed.value.length > 0) result[field] = parsed.value;
+  }
+
+  const bodyMatch = source.bodyMatch;
+  if (bodyMatch !== undefined && (typeof bodyMatch !== 'string' || !BODY_MATCH_MODES.includes(bodyMatch as BodyMatchMode))) {
+    return { ok: false, error: `request.bodyMatch 需为 ${BODY_MATCH_MODES.join(' / ')}` };
+  }
+  const bodyRaw = source.bodyRaw;
+  if (bodyRaw !== undefined && typeof bodyRaw !== 'string') {
+    return { ok: false, error: 'request.bodyRaw 需为字符串' };
+  }
+  const mode = bodyMatch as BodyMatchMode | undefined;
+  if (mode === 'deepEqual' || mode === 'textEqual') {
+    const expected = bodyRaw ?? '';
+    if (!expected.trim()) {
+      return { ok: false, error: `request.bodyMatch 为 ${mode} 时必须提供 request.bodyRaw（期望的${mode === 'deepEqual' ? '完整 JSON' : '原文'}）` };
+    }
+    if (mode === 'deepEqual') {
+      try {
+        JSON.parse(expected);
+      } catch {
+        return { ok: false, error: 'request.bodyRaw 需为合法的 JSON（完整 JSON 相等）' };
+      }
+    }
+    result.bodyMatch = mode;
+    result.bodyRaw = expected;
   }
   return { ok: true, value: result };
 }
@@ -214,15 +260,15 @@ function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
   return { ok: true, value: list };
 }
 
-/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate / crud / renderRequest）；未提供的字段不出现在结果中 */
+/** 解析路由行为字段（disabled / delayMs / jitterMs / failureRate / crud / renderRequest / gateStatus）；未提供的字段不出现在结果中 */
 function parseBehaviorFields(
   raw: unknown,
-): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud' | 'renderRequest'>> {
+): ParseResult<Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud' | 'renderRequest' | 'gateStatus'>> {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, error: '请求体需为 JSON 对象' };
   }
   const source = raw as Record<string, unknown>;
-  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud' | 'renderRequest'> = {};
+  const result: Pick<Route, 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'crud' | 'renderRequest' | 'gateStatus'> = {};
   if (source.disabled !== undefined) {
     if (typeof source.disabled !== 'boolean') {
       return { ok: false, error: 'disabled 需为布尔值' };
@@ -255,6 +301,12 @@ function parseBehaviorFields(
       return { ok: false, error: 'renderRequest 需为布尔值' };
     }
     result.renderRequest = source.renderRequest;
+  }
+  if (source.gateStatus !== undefined) {
+    if (typeof source.gateStatus !== 'number' || !GATE_STATUSES.includes(source.gateStatus)) {
+      return { ok: false, error: 'gateStatus 需为 400 / 404 / 422' };
+    }
+    result.gateStatus = source.gateStatus as Route['gateStatus'];
   }
   return { ok: true, value: result };
 }
@@ -829,7 +881,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     Object.assign(patch, behaviorParsed.value);
 
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud / auth）' });
+      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / gateStatus / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud / auth）' });
       return;
     }
 

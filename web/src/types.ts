@@ -24,8 +24,10 @@ export interface Route {
   response: RouteResponse;
   /** 默认响应的前置条件；仅 requireMatch 为 true 时作为接口准入门槛参与校验 */
   request?: RouteRequest;
-  /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则返回 400 */
+  /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则按 gateStatus 返回 */
   requireMatch?: boolean;
+  /** 请求准入失败时返回的状态码：400（缺省）/ 404（隐藏接口）/ 422 */
+  gateStatus?: 400 | 404 | 422;
   /** 路由级认证：配置后请求需携带正确凭证（401 优先于 requireMatch 门槛） */
   auth?: RouteAuth;
   /** 响应变体，按数组顺序优先于默认响应匹配 */
@@ -75,6 +77,15 @@ export interface RouteAuth {
 /** 条件值比对方式（后端 ConditionType 镜像）；缺省 string 字符串化比对 */
 export type ConditionType = 'string' | 'number' | 'boolean' | 'json' | 'array';
 
+/** 条件匹配操作符（后端 ConditionMatch 镜像）：存在 / 等于 / 非空 / 正则 */
+export type ConditionMatch = 'exists' | 'equals' | 'nonEmpty' | 'regex';
+
+/** body 匹配策略（后端 BodyMatchMode 镜像）：字段包含（缺省）/ 完整 JSON 相等 / 原文全文相等 */
+export type BodyMatchMode = 'subset' | 'deepEqual' | 'textEqual';
+
+/** 条件来源（请求准入的扁平条件列表用） */
+export type ConditionSource = 'query' | 'headers' | 'body';
+
 /** 单条请求匹配条件（key 精确比对，value 字符串化比对） */
 export interface RequestCondition {
   key: string;
@@ -83,15 +94,21 @@ export interface RequestCondition {
   type?: ConditionType;
   /** 必填：请求缺少该 key 即条件失败；false 时 key 缺失视为通过（存在才比对）。缺省 true */
   required?: boolean;
+  /** 匹配操作符（可选，新增）：缺省时沿用历史语义（value 空串 = 仅要求存在） */
+  match?: ConditionMatch;
 }
 
-/** 条件表格行草稿：enabled 为纯前端状态，未启用的行不参与提交 */
+/** 条件行草稿：enabled / match / source 为纯前端状态，未启用的行不参与提交 */
 export interface ConditionRow {
   key: string;
   value: string;
   type: ConditionType;
   required: boolean;
   enabled: boolean;
+  /** 匹配操作符：equals 等值（value 为空串表示等于空字符串）/ exists 存在 / nonEmpty 非空 / regex 正则 */
+  match: ConditionMatch;
+  /** 条件来源：仅「请求准入」的扁平条件列表使用；分支条件按页签分组，不写该字段 */
+  source?: ConditionSource;
 }
 
 /** 接口的预期请求条件：headers 不区分大小写、query 参数、JSON body 点路径 */
@@ -99,6 +116,10 @@ export interface RouteRequest {
   query?: RequestCondition[];
   headers?: RequestCondition[];
   body?: RequestCondition[];
+  /** body 匹配策略：subset（缺省）逐条条件子集匹配；deepEqual 整体 JSON 深度相等；textEqual 原文全文相等 */
+  bodyMatch?: BodyMatchMode;
+  /** bodyMatch 为 deepEqual 时的期望完整 JSON 文本；为 textEqual 时的期望原文文本 */
+  bodyRaw?: string;
 }
 
 /** 同一接口下的响应变体：按数组顺序匹配，第一个条件全部通过的生效 */
@@ -133,6 +154,8 @@ export interface RoutePayload {
   response: { status: number; headers?: ResponseHeader[]; body: string };
   request?: RouteRequest;
   requireMatch?: boolean;
+  /** 请求准入失败码（新建态仅在非 400 时携带；编辑态始终携带以便复位） */
+  gateStatus?: 400 | 404 | 422;
   variants?: Array<{
     name: string;
     match?: RouteRequest;

@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import type { ConditionRow, ConditionType } from '../types';
+import { computed } from 'vue';
+import type { ConditionMatch, ConditionRow, ConditionSource, ConditionType } from '../types';
+import { CONDITION_MATCH_LABELS } from '../utils';
 
 const props = defineProps<{
   rows: ConditionRow[];
+  /** 显示「来源」列（请求准入的扁平条件列表用；分支条件按页签分组，不显示） */
+  showSource?: boolean;
   keyPlaceholder?: string;
   valuePlaceholder?: string;
   addText?: string;
@@ -20,6 +24,17 @@ const TYPES: Array<{ value: ConditionType; label: string }> = [
   { value: 'array', label: 'array' },
 ];
 
+const SOURCES: Array<{ value: ConditionSource; label: string }> = [
+  { value: 'query', label: 'Params' },
+  { value: 'headers', label: 'Headers' },
+  { value: 'body', label: 'Body' },
+];
+
+/** 存在 / 非空无需填写期望值（空字符串也算存在） */
+const NO_VALUE_MATCHES: ReadonlySet<ConditionMatch> = new Set<ConditionMatch>(['exists', 'nonEmpty']);
+
+const rowsWithSource = computed(() => props.showSource === true);
+
 function update(index: number, field: keyof ConditionRow, value: string | boolean) {
   emit('update:rows', props.rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
 }
@@ -28,27 +43,42 @@ function updateText(index: number, field: 'key' | 'value', event: Event) {
   update(index, field, (event.target as HTMLInputElement).value);
 }
 
+function updateMatch(index: number, match: ConditionMatch) {
+  /* 切到「存在」时必填失去意义，统一置为必填，避免出现永远通过的无效条件 */
+  if (match === 'exists') {
+    emit('update:rows', props.rows.map((item, i) => (i === index ? { ...item, match, required: true } : item)));
+    return;
+  }
+  update(index, 'match', match);
+}
+
 function addRow() {
-  emit('update:rows', [...props.rows, { key: '', value: '', type: 'string', required: true, enabled: true }]);
+  emit('update:rows', [
+    ...props.rows,
+    {
+      key: '',
+      value: '',
+      type: 'string',
+      required: true,
+      enabled: true,
+      match: 'equals',
+      ...(rowsWithSource.value ? { source: 'query' as ConditionSource } : {}),
+    },
+  ]);
 }
 
 function removeRow(index: number) {
   emit('update:rows', props.rows.filter((_, i) => i !== index));
 }
+
+function matchHint(match: ConditionMatch): string {
+  return CONDITION_MATCH_LABELS.find((item) => item.value === match)?.hint ?? '';
+}
 </script>
 
 <template>
   <div class="cond-table">
-    <div v-if="rows.length" class="cond-grid cond-head">
-      <span>启用</span>
-      <span>参数名</span>
-      <span>参数值</span>
-      <span>类型</span>
-      <span>是否必填</span>
-      <span></span>
-    </div>
-
-    <div v-for="(row, i) in rows" :key="i" class="cond-grid cond-line" :class="{ off: !row.enabled }">
+    <div v-for="(row, i) in rows" :key="i" class="cond-row" :class="{ off: !row.enabled }">
       <input
         :checked="row.enabled"
         type="checkbox"
@@ -57,33 +87,68 @@ function removeRow(index: number) {
         :aria-label="`第 ${i + 1} 行启用`"
         @change="update(i, 'enabled', ($event.target as HTMLInputElement).checked)"
       >
+
+      <select
+        v-if="rowsWithSource"
+        :value="row.source ?? 'query'"
+        class="cond-source"
+        :aria-label="`第 ${i + 1} 行条件来源`"
+        @change="update(i, 'source', ($event.target as HTMLSelectElement).value as ConditionSource)"
+      >
+        <option v-for="s in SOURCES" :key="s.value" :value="s.value">{{ s.label }}</option>
+      </select>
+
       <input
         :value="row.key"
         type="text"
-        class="cond-input"
+        class="cond-input cond-key"
         :placeholder="keyPlaceholder ?? '参数名'"
         spellcheck="false"
         :aria-label="`第 ${i + 1} 行参数名`"
         @input="updateText(i, 'key', $event)"
       >
+
+      <select
+        :value="row.match"
+        class="cond-op"
+        :title="matchHint(row.match)"
+        :aria-label="`第 ${i + 1} 行匹配操作符`"
+        @change="updateMatch(i, ($event.target as HTMLSelectElement).value as ConditionMatch)"
+      >
+        <option v-for="op in CONDITION_MATCH_LABELS" :key="op.value" :value="op.value">{{ op.label }}</option>
+      </select>
+
+      <span v-if="row.match === 'exists' || row.match === 'nonEmpty'" class="cond-note">
+        {{ row.match === 'exists' ? '无需填写值 · 空字符串也算存在' : '无需填写值 · 存在且非空即通过' }}
+      </span>
       <input
+        v-else
         :value="row.value"
         type="text"
-        class="cond-input"
-        :placeholder="valuePlaceholder ?? '参数值（留空仅要求存在）'"
+        class="cond-input cond-value"
+        :class="{ 'cond-regex': row.match === 'regex' }"
+        :placeholder="row.match === 'regex' ? '正则，如 ^cn-\\w+$' : (valuePlaceholder ?? '参数值')"
         spellcheck="false"
         :aria-label="`第 ${i + 1} 行参数值`"
         @input="updateText(i, 'value', $event)"
       >
+
       <select
+        v-if="row.match === 'equals'"
         :value="row.type"
         class="cond-type"
+        title="比对方式：json 深度相等 / array 包含匹配"
         :aria-label="`第 ${i + 1} 行比对类型`"
         @change="update(i, 'type', ($event.target as HTMLSelectElement).value as ConditionType)"
       >
         <option v-for="t in TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
       </select>
-      <label class="cond-req" :title="row.required ? '必填：请求缺少该参数则本场景不命中' : '选填：请求携带该参数时才比对值'">
+
+      <label
+        v-if="row.match !== 'exists'"
+        class="cond-req"
+        :title="row.required ? '必填：请求缺少该参数则本条不通过' : '选填：请求携带该参数时才比对值'"
+      >
         <input
           :checked="row.required"
           type="checkbox"
@@ -93,49 +158,57 @@ function removeRow(index: number) {
         >
         <span>{{ row.required ? '必填' : '选填' }}</span>
       </label>
-      <button type="button" class="cond-remove" title="删除该行" :aria-label="`删除第 ${i + 1} 行`" @click="removeRow(i)">×</button>
+
+      <button type="button" class="cond-remove" title="删除该条件" :aria-label="`删除第 ${i + 1} 行`" @click="removeRow(i)">×</button>
     </div>
 
     <p v-if="!rows.length" class="cond-empty">暂无条件，点击下方按钮添加</p>
-    <button type="button" class="cond-add" @click="addRow">{{ addText ?? '＋ 添加参数' }}</button>
+    <button type="button" class="cond-add" @click="addRow">{{ addText ?? '＋ 添加条件' }}</button>
   </div>
 </template>
 
 <style scoped>
 .cond-table {
   display: grid;
-  gap: 6px;
+  gap: 7px;
 }
 
-.cond-grid {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1.1fr) minmax(0, 1.3fr) 92px 64px 24px;
-  gap: 6px;
+.cond-row {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
 }
 
-.cond-head {
-  padding: 0 2px;
-  font-size: 12px;
-  color: var(--text-dim);
-  text-align: center;
-}
-
-.cond-head span:nth-child(2),
-.cond-head span:nth-child(3) {
-  text-align: left;
-}
-
-.cond-line.off .cond-input,
-.cond-line.off .cond-type {
-  opacity: 0.4;
+.cond-row.off .cond-input,
+.cond-row.off .cond-type,
+.cond-row.off .cond-op,
+.cond-row.off .cond-source,
+.cond-row.off .cond-note {
+  opacity: 0.45;
 }
 
 .cond-check {
-  justify-self: center;
+  flex: none;
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cond-source {
+  flex: none;
+  width: 92px;
+  padding: 7px 6px !important;
+  border-color: transparent;
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+  font-size: 12px !important;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -144,17 +217,48 @@ function removeRow(index: number) {
   font-size: 12px !important;
 }
 
+.cond-key {
+  flex: 1 1 92px;
+  min-width: 0;
+}
+
+.cond-value {
+  flex: 1 1 96px;
+  min-width: 0;
+}
+
+.cond-value.cond-regex {
+  font-family: var(--mono);
+}
+
+.cond-op {
+  flex: none;
+  width: 74px;
+  padding: 7px 6px !important;
+  font-size: 12px !important;
+  cursor: pointer;
+}
+
+.cond-note {
+  flex: 1 1 150px;
+  min-width: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 0 4px;
+}
+
 .cond-type {
-  width: 100%;
+  flex: none;
+  width: 74px;
   padding: 7px 6px !important;
   font-size: 12px !important;
   cursor: pointer;
 }
 
 .cond-req {
+  flex: none;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 4px;
   font-size: 12px;
   color: var(--text-dim);
@@ -163,9 +267,9 @@ function removeRow(index: number) {
 }
 
 .cond-remove {
-  justify-self: center;
-  width: 24px;
-  height: 24px;
+  flex: none;
+  width: 26px;
+  height: 26px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: none;

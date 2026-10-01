@@ -69,6 +69,9 @@ export interface RouteAuth {
 /** 条件值比对方式；缺省按 string 字符串化比对（兼容旧数据） */
 export type ConditionType = 'string' | 'number' | 'boolean' | 'json' | 'array';
 
+/** 条件匹配操作符（显式语义）；缺省时沿用历史语义：required 控制 key 缺失是否通过、value 为空串表示「仅要求存在」 */
+export type ConditionMatch = 'exists' | 'equals' | 'nonEmpty' | 'regex';
+
 /** 单条请求匹配条件（key 精确比对，value 字符串化比对） */
 export interface RequestCondition {
   key: string;
@@ -77,13 +80,29 @@ export interface RequestCondition {
   type?: ConditionType;
   /** 必填：请求缺少该 key 即条件失败；false 时 key 缺失视为通过（存在才比对）。缺省 true */
   required?: boolean;
+  /**
+   * 匹配操作符（新增，可选）：exists 只要求 key 存在；equals 显式等值比对（此时 value 空串表示「等于空字符串」）；
+   * nonEmpty 要求存在且非空（空字符串 / null 视为空）；regex 期望值按正则匹配字符串化后的实际值。
+   * 缺省时保持历史语义（value 为空串 = 仅要求存在），旧配置无需迁移。
+   */
+  match?: ConditionMatch;
 }
+
+/** body 整体匹配策略（新增，可选）：缺省 subset 逐条条件子集匹配 */
+export type BodyMatchMode = 'subset' | 'deepEqual' | 'textEqual';
 
 /** 接口的预期请求条件：headers 不区分大小写、query 参数、JSON body 点路径 */
 export interface RouteRequest {
   query?: RequestCondition[];
   headers?: RequestCondition[];
   body?: RequestCondition[];
+  /**
+   * body 匹配策略（新增，可选）：subset（缺省）= 逐条 body 条件按点路径子集匹配；
+   * deepEqual = 请求体与 bodyRaw 解析出的 JSON 深度相等（body 条件行被忽略）；textEqual = 请求体原文与 bodyRaw 逐字符相等。
+   */
+  bodyMatch?: BodyMatchMode;
+  /** bodyMatch 为 deepEqual 时是期望的完整 JSON 文本；为 textEqual 时是期望的原文文本；subset 时忽略 */
+  bodyRaw?: string;
 }
 
 /** 同一接口下的响应变体：按数组顺序匹配，第一个条件全部通过的生效 */
@@ -115,8 +134,10 @@ export interface Route {
   response: RouteResponse;
   /** 默认响应的前置条件；仅 requireMatch 为 true 时作为接口准入门槛参与校验 */
   request?: RouteRequest;
-  /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则返回 400 */
+  /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则按 gateStatus 返回 */
   requireMatch?: boolean;
+  /** 请求准入（requireMatch）失败时返回的状态码（新增，可选）：400（缺省）/ 404（隐藏接口）/ 422 */
+  gateStatus?: 400 | 404 | 422;
   /** 路由级认证：配置后请求需携带正确凭证（401 优先于 requireMatch 门槛） */
   auth?: RouteAuth;
   /** 响应变体，按数组顺序优先于默认响应匹配 */

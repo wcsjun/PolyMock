@@ -1016,8 +1016,8 @@ body.sidebar-resizing iframe { pointer-events: none; }
   right: 0;
   bottom: 0;
   z-index: 41;
-  /* 随视口自适应：窄屏不低于 720px，宽屏最多 1280px；拖拽后的内联宽度由 max-width 兜底防溢出 */
-  width: min(clamp(720px, 60vw, 1280px), 94vw);
+  /* 随视口自适应：窄屏不低于 860px（条件行需要横向空间），宽屏最多 1440px；拖拽后的内联宽度由 max-width 兜底防溢出 */
+  width: min(clamp(860px, 76vw, 1440px), 94vw);
   max-width: 94vw;
   background: var(--panel);
   border-left: 1px solid var(--line);
@@ -1284,22 +1284,6 @@ body.drawer-resizing iframe { pointer-events: none; }
 }
 
 /* ---------- 表单高级选项（延迟 / 抖动 / 故障注入） ---------- */
-.advanced-toggle {
-  justify-self: start;
-  padding: 2px 0;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  font-family: var(--sans);
-  font-size: 12px;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-
-.advanced-toggle:hover {
-  color: var(--accent-strong);
-}
-
 .advanced-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

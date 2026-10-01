@@ -17,10 +17,10 @@ test('新增接口：注册 /api/e2e-demo 后可调用，删除后卡片消失',
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole('button', { name: /注册接口/ })).toBeVisible();
 
-  // 填接口名称与路径（默认场景响应 body 为空会被后端 400 拒绝，故填入合法 JSON）
+  // 填接口名称与路径（默认响应 body 为空会被后端 400 拒绝，故填入合法 JSON）
   await drawer.getByLabel('接口名称').fill('E2E测试');
   await drawer.locator('#f-path').fill(DEMO_PATH);
-  await drawer.locator('.resp-field textarea').fill('{"ok":true}');
+  await drawer.locator('#f-resp-body').fill('{"ok":true}');
 
   // 提交注册
   await drawer.getByRole('button', { name: /注册接口/ }).click();
