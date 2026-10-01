@@ -101,14 +101,41 @@ function asBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
-/** 解析请求体原文：合法 JSON 返回解析值，否则 undefined（与 express.json 一样只认 JSON） */
-function parseJsonBody(bodyText: string): unknown {
+/**
+ * 与后端 express.json 一致的「会解析」判定：仅 application/json 与 application/*+json
+ *（忽略参数与大小写）；未声明 Content-Type 时后端不解析（req.body 为 undefined）。
+ */
+function isParsedJsonContentType(contentType: string | undefined): boolean {
+  if (!contentType) return false;
+  const mediaType = contentType.split(';', 1)[0].trim().toLowerCase();
+  return mediaType === 'application/json' || mediaType.endsWith('+json');
+}
+
+/**
+ * 与后端一致的请求体原文可用性（textEqual 用）：application/json 与 *+json 由解析器 verify 顺带捕获，
+ * 其余显式非 JSON Content-Type 由中间件捕获；未声明 Content-Type 或 text/json 时原文不可用。
+ */
+function isRawBodyAvailable(contentType: string | undefined): boolean {
+  if (!contentType) return false;
+  return contentType.split(';', 1)[0].trim().toLowerCase() !== 'text/json';
+}
+
+/** 测试请求体的解析结果（与后端 express.json strict 模式对齐） */
+type ParsedRequestBody =
+  | { kind: 'skipped' } /* Content-Type 非 JSON 类或未声明：后端 req.body 为 undefined */
+  | { kind: 'rejected' } /* JSON 类但原文非法或为顶层标量：后端 body 解析器直接 400，不进入路由分发 */
+  | { kind: 'parsed'; value: unknown };
+
+/** 解析测试请求体：Content-Type 为 JSON 类时才解析，且 strict 模式只收对象/数组（与后端一致） */
+function parseRequestBody(bodyText: string, contentType: string | undefined): ParsedRequestBody {
+  if (!isParsedJsonContentType(contentType)) return { kind: 'skipped' };
   const raw = bodyText.trim();
-  if (!raw) return undefined;
+  if (!raw) return { kind: 'skipped' };
+  if (raw[0] !== '{' && raw[0] !== '[') return { kind: 'rejected' };
   try {
-    return JSON.parse(raw);
+    return { kind: 'parsed', value: JSON.parse(raw) };
   } catch {
-    return undefined;
+    return { kind: 'rejected' };
   }
 }
 
@@ -219,8 +246,11 @@ export function matchBodyConditions(request: RouteRequest, req: PreviewRequest, 
       ? null
       : `请求体与期望的完整 JSON 不相等（期望 ${textPreview(expectedRaw)}，实际 ${textPreview(JSON.stringify(jsonBody) ?? 'undefined')}）`;
   }
+  /* textEqual：原文可用性与后端捕获行为对齐（未声明 Content-Type / text/json 时后端拿不到原文） */
+  if (!isRawBodyAvailable(req.headers['content-type'])) {
+    return '请求体原文不可用（Content-Type 未声明或为 text/json 时后端不捕获原文）';
+  }
   const actual = req.bodyText;
-  if (actual === undefined) return '请求体原文不可用，无法做原文全文比对';
   return actual === expectedRaw ? null : `请求体原文与期望不一致（期望 ${textPreview(expectedRaw)}，实际 ${textPreview(actual)}）`;
 }
 
@@ -235,7 +265,9 @@ export function matchRequest(request: RouteRequest | undefined, req: PreviewRequ
     const reason = matchCondition(cond, req.query[cond.key]);
     if (reason) return `查询参数 ${cond.key} ${reason}`;
   }
-  return matchBodyConditions(request, req, parseJsonBody(req.bodyText));
+  /* 与后端一致：Content-Type 非 JSON 类（或未声明）时 req.body 为 undefined，body 条件按缺失处理 */
+  const parsed = parseRequestBody(req.bodyText, req.headers['content-type']);
+  return matchBodyConditions(request, req, parsed.kind === 'parsed' ? parsed.value : undefined);
 }
 
 /** 路径段匹配：模式路径含 :param 时提取参数；不匹配返回 undefined */
@@ -268,11 +300,21 @@ function checkAuth(auth: NonNullable<PreviewRoute['auth']>, req: PreviewRequest)
 
 /**
  * 推演一次请求的解释路径（顺序与后端分发一致）：
- * 停用 404 → 路径未匹配 404 → 认证 401 → 请求准入（gateStatus）→ 序列响应 → 全局场景集 → 分支顺序匹配 → 默认响应。
+ * 请求体解析失败 400（先于路由）→ 停用 404 → 路径未匹配 404 → 认证 401 → 请求准入（gateStatus）→ 序列响应 → 全局场景集 → 分支顺序匹配 → 默认响应。
  */
 export function previewOutcome(route: PreviewRoute, req: PreviewRequest): PreviewOutcome {
   const steps: PreviewStep[] = [];
   const label = `${req.method.toUpperCase()} ${req.path}`;
+
+  /* 与后端一致：JSON 类 Content-Type 但请求体非法（或为顶层标量）时，body 解析器直接 400，先于路由匹配 */
+  if (parseRequestBody(req.bodyText, req.headers['content-type']).kind === 'rejected') {
+    steps.push({
+      title: '请求体解析',
+      detail: 'Content-Type 为 JSON 类，但请求体不是合法的对象/数组 JSON，被解析器拒绝（先于路径与准入）',
+      status: 'blocked',
+    });
+    return { status: 400, title: '请求体解析失败 · 未进入分发', steps, variant: null, responded: false };
+  }
 
   if (route.disabled) {
     steps.push({ title: '路径', detail: label, status: 'ok' });

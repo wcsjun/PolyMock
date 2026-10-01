@@ -86,7 +86,7 @@ const STEP_TAGS: Record<string, { label: string; cls: string }> = {
       </label>
       <label class="preview-field">
         <span>Body</span>
-        <textarea v-model="testBody" rows="3" placeholder='{ "status": "PAID" }' spellcheck="false" aria-label="测试请求体"></textarea>
+        <textarea v-model="testBody" rows="3" placeholder='{ "status": "PAID" }（需在 Headers 声明 Content-Type）' spellcheck="false" aria-label="测试请求体"></textarea>
       </label>
     </div>
 
@@ -106,7 +106,8 @@ const STEP_TAGS: Record<string, { label: string; cls: string }> = {
     </div>
 
     <p class="preview-note">
-      本地推演，不发送真实请求：顺序为「路径 → 认证 → 请求准入 → 序列响应 → 全局场景集 → 分支 → 默认响应」。
+      本地推演，不发送真实请求：顺序为「请求体解析 → 路径 → 认证 → 请求准入 → 序列响应 → 全局场景集 → 分支 → 默认响应」。
+      Body 仅在 Headers 含 Content-Type: application/json（或 *+json）时按 JSON 解析参与匹配，非法或顶层标量 JSON 按解析器 400 拒绝，均与后端一致。
       延迟与故障注入按概率生效，这里不体现。
     </p>
   </div>

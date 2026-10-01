@@ -58,28 +58,70 @@ describe('matchCondition 条件语义（与后端一致）', () => {
   });
 });
 
+/** JSON Content-Type 请求头（后端只在此类头下解析 body，与预览语义一致） */
+const JSON_CT = { 'content-type': 'application/json' };
+
 describe('matchRequest body 策略', () => {
   it('subset：点路径子集匹配，选填条件在 body 缺失时放行', () => {
     const request = { body: [{ key: 'user.id', value: '1' }, { key: 'coupon', value: 'x', required: false }] };
-    expect(matchRequest(request, req({ bodyText: '{"user":{"id":1}}' }))).toBeNull();
-    expect(matchRequest(request, req({ bodyText: '{"user":{"id":2}}' }))).toContain('user.id');
+    expect(matchRequest(request, req({ headers: JSON_CT, bodyText: '{"user":{"id":1}}' }))).toBeNull();
+    expect(matchRequest(request, req({ headers: JSON_CT, bodyText: '{"user":{"id":2}}' }))).toContain('user.id');
     expect(matchRequest({ body: [{ key: 'coupon', value: 'x', required: false }] }, req())).toBeNull();
   });
 
   it('deepEqual：字段顺序无关，缺字段 / 多字段不命中', () => {
     const request = { bodyMatch: 'deepEqual' as const, bodyRaw: '{"status":"PAID","orderId":"1001"}' };
-    expect(matchRequest(request, req({ method: 'POST', bodyText: '{"orderId":"1001","status":"PAID"}' }))).toBeNull();
-    expect(matchRequest(request, req({ method: 'POST', bodyText: '{"orderId":"1001","status":"PAID","x":1}' }))).toContain('完整 JSON');
-    expect(matchRequest(request, req({ method: 'POST', bodyText: '{"orderId":"1001"}' }))).toContain('完整 JSON');
-    expect(matchRequest(request, req({ method: 'POST', bodyText: '' }))).toContain('请求体缺失');
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{"orderId":"1001","status":"PAID"}' }))).toBeNull();
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{"orderId":"1001","status":"PAID","x":1}' }))).toContain('完整 JSON');
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{"orderId":"1001"}' }))).toContain('完整 JSON');
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '' }))).toContain('请求体缺失');
   });
 
   it('textEqual：逐字符比对（空格与顺序都影响结果）', () => {
     const request = { bodyMatch: 'textEqual' as const, bodyRaw: '{"status":"PAID"}' };
-    expect(matchRequest(request, req({ method: 'POST', bodyText: '{"status":"PAID"}' }))).toBeNull();
-    expect(matchRequest(request, req({ method: 'POST', bodyText: '{ "status": "PAID" }' }))).toContain('原文');
-    /* 非 JSON 文本同样按原文比对 */
-    expect(matchRequest(request, req({ method: 'POST', bodyText: 'hello' }))).toContain('原文');
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{"status":"PAID"}' }))).toBeNull();
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{ "status": "PAID" }' }))).toContain('原文');
+    /* 非 JSON 文本同样按原文比对（显式非 JSON Content-Type 时后端由中间件捕获原文） */
+    expect(matchRequest(request, req({ method: 'POST', headers: { 'content-type': 'text/plain' }, bodyText: 'hello' }))).toContain('原文');
+  });
+});
+
+describe('Content-Type 语义（与后端一致）', () => {
+  it('未声明或非 JSON Content-Type 时 body 不参与解析匹配（即使原文是合法 JSON）', () => {
+    const request = { bodyMatch: 'deepEqual' as const, bodyRaw: '{"a":1}' };
+    expect(matchRequest(request, req({ method: 'POST', bodyText: '{"a":1}' }))).toContain('请求体缺失');
+    expect(matchRequest(request, req({ method: 'POST', headers: { 'content-type': 'text/plain' }, bodyText: '{"a":1}' }))).toContain('请求体缺失');
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{"a":1}' }))).toBeNull();
+    /* *+json 后缀同样按 JSON 解析（忽略参数） */
+    expect(matchRequest(request, req({ method: 'POST', headers: { 'content-type': 'application/vnd.api+json; charset=utf-8' }, bodyText: '{"a":1}' }))).toBeNull();
+  });
+
+  it('subset 条件同样要求 JSON Content-Type', () => {
+    const request = { body: [{ key: 'a', value: '1' }] };
+    expect(matchRequest(request, req({ method: 'POST', bodyText: '{"a":1}' }))).toContain('请求体缺失');
+    expect(matchRequest(request, req({ method: 'POST', headers: JSON_CT, bodyText: '{"a":1}' }))).toBeNull();
+  });
+
+  it('textEqual：未声明 Content-Type 或 text/json 时原文不可用（与后端捕获行为一致）', () => {
+    const request = { bodyMatch: 'textEqual' as const, bodyRaw: 'raw-body' };
+    expect(matchRequest(request, req({ method: 'POST', bodyText: 'raw-body' }))).toContain('原文不可用');
+    expect(matchRequest(request, req({ method: 'POST', headers: { 'content-type': 'text/json' }, bodyText: 'raw-body' }))).toContain('原文不可用');
+    expect(matchRequest(request, req({ method: 'POST', headers: { 'content-type': 'text/plain' }, bodyText: 'raw-body' }))).toBeNull();
+  });
+
+  it('非法或顶层标量 JSON 被解析器 400 拒绝（先于路径匹配与准入）', () => {
+    /* 顶层标量：strict 模式只收对象/数组 */
+    const scalar = previewOutcome(route(), req({ headers: JSON_CT, bodyText: '"abc"' }));
+    expect(scalar.status).toBe(400);
+    expect(scalar.title).toContain('解析失败');
+    expect(scalar.responded).toBe(false);
+    /* 非法 JSON：即使路径不匹配，也是 400 先于 404 */
+    const invalid = previewOutcome(route(), req({ path: '/api/other', headers: JSON_CT, bodyText: '{bad' }));
+    expect(invalid.status).toBe(400);
+    expect(invalid.steps[0].title).toBe('请求体解析');
+    /* 顶层数组是合法的（strict 允许对象/数组），照常进入分发 */
+    const arr = previewOutcome(route(), req({ headers: JSON_CT, bodyText: '[1,2]' }));
+    expect(arr.status).toBe(200);
   });
 });
 
