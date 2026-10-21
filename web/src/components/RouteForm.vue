@@ -162,6 +162,8 @@ const submitting = ref(false);
 /* ---------- 请求准入（共享门槛，映射 request + requireMatch） ---------- */
 
 const gateOn = ref(false);
+/** 准入门槛区默认折叠：折叠态靠头部徽标显示开启/关闭 */
+const gateOpen = ref(false);
 /** 扁平条件列表：每行自带来源（Params / Headers / Body） */
 const gateRows = ref<ConditionRow[]>([]);
 const gateBodyMatch = ref<BodyMatchMode>('subset');
@@ -914,6 +916,7 @@ watch(
       authHeader.value = route.auth?.header ?? '';
 
       bodyEditorMode.value = 'rows';
+      gateOpen.value = false;
       advancedOpen.value = false;
       previewOpen.value = false;
 
@@ -955,6 +958,7 @@ function resetForm() {
   bodyEditorMode.value = 'rows';
   bodyJson.value = '';
   bodyJsonInvalid.value = false;
+  gateOpen.value = false;
   previewOpen.value = false;
   serviceId.value = props.services.some((s) => s.id === keepService) ? keepService : props.services[0]?.id ?? '';
 }
@@ -1024,9 +1028,20 @@ function resetForm() {
             <div class="card-title">请求准入</div>
             <div class="card-note">共享条件只配置一次，所有响应分支都会先经过这里。</div>
           </div>
-          <span class="card-chip" :class="{ off: !gateOn }">{{ gateOn ? '已开启' : '已关闭' }}</span>
+          <div class="card-head-ops">
+            <span class="card-chip state" :class="{ off: !gateOn }">{{ gateOn ? '已开启' : '已关闭' }}</span>
+            <button
+              type="button"
+              class="mini-btn"
+              :aria-expanded="gateOpen"
+              aria-controls="gate-body"
+              @click="gateOpen = !gateOpen"
+            >
+              {{ gateOpen ? '收起 ▴' : '展开 ▾' }}
+            </button>
+          </div>
         </div>
-        <div class="card-body">
+        <div v-show="gateOpen" id="gate-body" class="card-body">
           <label class="switch-row" for="f-gate">
             <span class="switch-text">
               <span class="switch-title">启用请求准入</span>
@@ -1126,9 +1141,11 @@ function resetForm() {
           <div class="branch-editor-head">
             <span class="hint">分支按标签顺序匹配，第一个命中的生效；拖动标签可调整顺序（聚焦标签后 ← / → 亦可）</span>
             <button
-              v-if="!activeIsDefault"
               type="button"
               class="branch-delete"
+              :class="{ invisible: activeIsDefault }"
+              :disabled="activeIsDefault"
+              :aria-hidden="activeIsDefault"
               :title="`删除分支「${activeBranchLabel}」`"
               @click="removeScene(activeId)"
             >
@@ -1513,6 +1530,28 @@ function resetForm() {
   color: var(--text-faint);
 }
 
+/* 准入状态徽标：圆点 + 文字，折叠态也能快速分辨开关 */
+.card-chip.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.card-chip.state::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.card-head-ops {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .card-body {
   display: grid;
   gap: 12px;
@@ -1697,6 +1736,11 @@ function resetForm() {
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
+}
+
+/* 默认响应不可删除：保留按钮占位，避免切换分支时框体高度跳动 */
+.branch-delete.invisible {
+  visibility: hidden;
 }
 
 .branch-delete:hover {

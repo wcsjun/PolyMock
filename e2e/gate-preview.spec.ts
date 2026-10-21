@@ -18,7 +18,8 @@ test('请求准入 + 响应分支：正则共享条件、准入失败码 404 与
   await drawer.getByLabel('接口名称').fill('E2E 准入与分支');
   await drawer.locator('#f-path').fill(DEMO_PATH);
 
-  // ---- 请求准入：tenantId 存在 + region 正则 ----
+  // ---- 请求准入：tenantId 存在 + region 正则（准入区默认折叠，先展开）----
+  await drawer.getByRole('button', { name: '展开 ▾' }).click();
   await drawer.locator('#f-gate').check({ force: true });
   const gate = drawer.locator('.gate-body');
   await gate.getByRole('button', { name: /添加共享条件/ }).click();
@@ -137,4 +138,29 @@ test('响应分支：拖动标签调整匹配顺序，第一个命中的分支�
   expect(body).toEqual({ scope: 'second' });
 
   await request.delete(`/__polymock/routes?method=GET&path=${encodeURIComponent(ORDER_PATH)}`);
+});
+
+/**
+ * 请求准入默认折叠：折叠态用头部徽标直接显示开启/关闭，
+ * 展开后才出现开关与条件编辑区。
+ */
+test('请求准入默认折叠：折叠态徽标显示开启/关闭', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /新增接口/ }).click();
+  const drawer = page.getByRole('dialog', { name: '接口编辑表单' });
+  const gateCard = drawer.locator('.card').filter({ has: page.locator('#gate-body') });
+  const chip = gateCard.locator('.card-chip');
+
+  await expect(gateCard.locator('#gate-body')).toBeHidden();
+  await expect(chip).toHaveText('已关闭');
+
+  await drawer.getByRole('button', { name: '展开 ▾' }).click();
+  await expect(gateCard.locator('#gate-body')).toBeVisible();
+  await gateCard.locator('#f-gate').check({ force: true });
+  await expect(chip).toHaveText('已开启');
+
+  // 收起后仍能一眼看出处于开启态
+  await drawer.getByRole('button', { name: '收起 ▴' }).click();
+  await expect(gateCard.locator('#gate-body')).toBeHidden();
+  await expect(chip).toHaveText('已开启');
 });
