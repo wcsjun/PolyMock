@@ -249,7 +249,8 @@ function matchHint(match: ConditionMatch): string {
 
 .cond-type {
   flex: none;
-  width: 74px;
+  /* 12px 等宽字体下 boolean 约 50px，窄于此会被原生下拉箭头压住 */
+  width: 88px;
   padding: 7px 6px !important;
   font-size: 12px !important;
   cursor: pointer;
