@@ -7,6 +7,8 @@ import {
   fetchRoutes,
   fetchServices,
   fetchSettings,
+  getAdminToken,
+  setAdminToken,
   updateRouteFlags,
   updateSettings,
 } from './api';
@@ -61,6 +63,33 @@ function showToast(message: string, kind: ToastKind = 'ok') {
   toastTimer = setTimeout(() => {
     toast.value.visible = false;
   }, 2600);
+}
+
+/* ---------- 管理令牌（后端设置 POLYMOCK_ADMIN_TOKEN 时才需要） ---------- */
+
+const tokenOpen = ref(false);
+const tokenDraft = ref('');
+/** 是否已保存令牌：侧边栏入口直接显示，避免用户反复试错 */
+const hasToken = ref(getAdminToken() !== '');
+
+function openTokenDialog() {
+  tokenDraft.value = getAdminToken();
+  tokenOpen.value = true;
+}
+
+function saveToken() {
+  setAdminToken(tokenDraft.value.trim());
+  hasToken.value = getAdminToken() !== '';
+  tokenOpen.value = false;
+  showToast(hasToken.value ? '管理令牌已保存' : '管理令牌已清除');
+  /* 保存后立刻重连，覆盖此前 401 导致的数据加载失败 */
+  void loadAll();
+  void loadSettings();
+}
+
+function clearToken() {
+  tokenDraft.value = '';
+  saveToken();
 }
 
 /* ---------- 数据加载与轮询 ---------- */
@@ -226,6 +255,10 @@ const importOpen = ref(false);
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return;
+  if (tokenOpen.value) {
+    tokenOpen.value = false;
+    return;
+  }
   if (importOpen.value) {
     importOpen.value = false;
     return;
@@ -235,7 +268,7 @@ function onKeydown(event: KeyboardEvent) {
 
 /* 任一抽屉打开时锁定背景滚动 */
 watch(
-  () => drawerOpen.value || importOpen.value,
+  () => drawerOpen.value || importOpen.value || tokenOpen.value,
   (open) => {
     document.body.style.overflow = open ? 'hidden' : '';
   },
@@ -391,6 +424,10 @@ function onSidebarRzDown(event: PointerEvent) {
           <span class="meta-sep">·</span>
           <span>{{ routeCountText }}</span>
         </div>
+        <button type="button" class="token-entry" :class="{ on: hasToken }" @click="openTokenDialog">
+          <span>⚿ 管理令牌</span>
+          <em>{{ hasToken ? '已设置' : '未设置' }}</em>
+        </button>
       </div>
 
       <div
@@ -491,6 +528,35 @@ function onSidebarRzDown(event: PointerEvent) {
     @imported="loadAll"
   />
 
+  <!-- 管理令牌设置 -->
+  <div v-if="tokenOpen" class="token-mask" @click.self="tokenOpen = false">
+    <div class="token-dialog" role="dialog" aria-modal="true" aria-label="管理令牌">
+      <div class="token-head">
+        <h2>管理令牌</h2>
+        <button type="button" class="drawer-close" title="关闭" aria-label="关闭令牌设置" @click="tokenOpen = false">×</button>
+      </div>
+      <p class="hint">
+        后端设置 <code>POLYMOCK_ADMIN_TOKEN</code> 后，管理 API 需携带该令牌。令牌只保存在本机浏览器，不会写入配置文件。
+      </p>
+      <label class="token-field" for="f-admin-token">
+        令牌
+        <input
+          id="f-admin-token"
+          v-model="tokenDraft"
+          type="password"
+          placeholder="留空表示不使用令牌"
+          spellcheck="false"
+          autocomplete="off"
+          autofocus
+        >
+      </label>
+      <div class="token-actions">
+        <button type="button" class="token-save" @click="saveToken">保存</button>
+        <button v-if="hasToken" type="button" class="token-clear" @click="clearToken">清除</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="toast.visible" class="toast" :class="toast.kind">{{ toast.message }}</div>
 </template>
 
@@ -543,6 +609,137 @@ function onSidebarRzDown(event: PointerEvent) {
   width: 100%;
   padding: 7px 10px;
   font-size: 12px;
+}
+
+/* 侧边栏「管理令牌」入口：与状态行同字号，已设置时用强调色 */
+.token-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px -8px -2px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.token-entry:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.token-entry em {
+  font-style: normal;
+  color: var(--text-faint);
+}
+
+.token-entry.on em {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* 管理令牌弹窗：仅一个输入框，居中轻量对话框 */
+.token-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(28, 39, 51, 0.42);
+  animation: fade-in 0.2s ease both;
+}
+
+.token-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(28, 39, 51, 0.18);
+}
+
+.token-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.token-head h2 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.token-dialog .hint {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.token-dialog code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.token-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.token-field input {
+  font-size: 13px;
+}
+
+.token-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.token-save {
+  padding: 7px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.token-save:hover {
+  background: var(--accent-strong);
+}
+
+.token-clear {
+  padding: 7px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.token-clear:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* 与 sidebar-foot 一致：窄屏下隐藏 */

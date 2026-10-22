@@ -14,7 +14,7 @@
 - 同一接口可定义多个响应场景（变体），按请求条件自动分流，或一键全局切换
 - 未注册的请求可穿透代理到真实后端，Mock 与真实接口无缝衔接
 
-技术栈：Node.js 18+ / TypeScript / Express 5（后端），Vue 3 + Vite（Web 控制台），Vitest（测试）。包管理器为 pnpm。
+技术栈：Node.js 22.13+ / TypeScript / Express 5（后端），Vue 3 + Vite（Web 控制台），Vitest（测试）。包管理器为 pnpm。
 
 ## 快速开始
 
@@ -174,7 +174,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 ### 安全（可选）
 
-- **管理令牌**：设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 场景可用 `?token=` 查询参数），否则返回 401
+- **管理令牌**：设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 场景可用 `?token=` 查询参数），否则返回 401；Web 控制台左侧栏「管理令牌」可直接填写 / 清除，令牌仅保存在本机浏览器 localStorage（键 `polymock:token`），401 报错会提示该入口
 - **代理白名单**：设置 `POLYMOCK_PROXY_ALLOW`（逗号分隔 host 列表）后，代理目标 hostname 必须在白名单内（管理端设置与转发前双重校验）
 
 ## Web 控制台

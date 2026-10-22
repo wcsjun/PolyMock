@@ -14,7 +14,7 @@ It is not a static fixture tool but a **local server whose routes are managed at
 - Define multiple response scenarios (variants) per route, routed automatically by request conditions or switched globally with one click
 - Unmatched requests can pass through a proxy to the real backend, so mocks and live APIs blend seamlessly
 
-Tech stack: Node.js 18+ / TypeScript / Express 5 (backend), Vue 3 + Vite (web console), Vitest (tests). Package manager: pnpm.
+Tech stack: Node.js 22.13+ / TypeScript / Express 5 (backend), Vue 3 + Vite (web console), Vitest (tests). Package manager: pnpm.
 
 ## Quick Start
 
@@ -174,7 +174,7 @@ Routes with `crud` enabled respond with resource semantics (in-memory only, rese
 
 ### Security (optional)
 
-- **Admin token**: when `POLYMOCK_ADMIN_TOKEN` is set, every `/__polymock` endpoint requires the `x-polymock-token` header (or `?token=` for SSE), otherwise 401
+- **Admin token**: when `POLYMOCK_ADMIN_TOKEN` is set, every `/__polymock` endpoint requires the `x-polymock-token` header (or `?token=` for SSE), otherwise 401; the web console's sidebar "Admin token" entry sets or clears it (stored only in this browser's localStorage under `polymock:token`), and 401 errors point to that entry
 - **Proxy allowlist**: when `POLYMOCK_PROXY_ALLOW` is set (comma-separated host list), a proxy target's hostname must be on the list — enforced both when setting the target and before each forward
 
 ## Web Console

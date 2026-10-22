@@ -25,7 +25,11 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   if (token) headers.set('x-polymock-token', token);
   const res = await fetch(path, { ...options, headers });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
+  if (!res.ok) {
+    const message = data.error || `请求失败（${res.status}）`;
+    /* 401 时补上控制台入口，避免用户只看到「需要令牌」却不知道去哪填 */
+    throw new Error(res.status === 401 ? `${message}；可在左侧栏「管理令牌」中填写` : message);
+  }
   return data as T;
 }
 
