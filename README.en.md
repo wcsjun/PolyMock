@@ -2,16 +2,17 @@
 
 English | [简体中文](./README.md)
 
-> A local HTTP mock server: group services on independent ports or path prefixes, register routes at runtime, match requests by conditions, and switch response scenarios on the fly — built for frontend local development and integration testing.
+> A local HTTP / WebSocket mock server: group services on independent ports or path prefixes, register routes at runtime, match requests by conditions, switch response scenarios on the fly, and script WS pushes — built for frontend local development and integration testing.
 
 ## Introduction
 
-Backend APIs under active development often live on an intranet, forcing developers to switch networks back and forth between local work and live integration. PolyMock simulates those HTTP APIs locally: point your app at PolyMock during development, then switch the base URL back to the real backend when it is time to integrate — no code changes in between.
+Backend APIs under active development often live on an intranet, forcing developers to switch networks back and forth between local work and live integration. PolyMock simulates those APIs locally: point your app at PolyMock during development, then switch the base URL back to the real backend when it is time to integrate — no code changes in between.
 
 It is not a static fixture tool but a **local server whose routes are managed at runtime**:
 
-- Register, edit, enable/disable routes at any time via the web console or the admin API — no restarts
+- Register, edit, enable/disable HTTP and WS routes at any time via the web console or the admin API — no restarts
 - Define multiple response scenarios (variants) per route, routed automatically by request conditions or switched globally with one click
+- WS routes support on-connect pushes (onOpen), replies to incoming messages (echo / fixed / sequence), and interval pushes, with a visual debugging console
 - Unmatched requests can pass through a proxy to the real backend, so mocks and live APIs blend seamlessly
 
 Tech stack: Node.js 22.13+ / TypeScript / Express 5 (backend), Vue 3 + Vite (web console), Vitest (tests). Package manager: pnpm.
@@ -78,6 +79,28 @@ curl -X POST http://localhost:33233/__polymock/routes \
 
 curl http://localhost:33233/api/orders                                    # {"role":"default"}
 curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"role":"admin"}
+```
+
+Register a WS route (two on-open pushes, echo replies, a 5-second interval push):
+
+```bash
+curl -X POST http://localhost:33233/__polymock/routes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "ws",
+    "name": "Order status push",
+    "path": "/ws/orders",
+    "ws": {
+      "onOpen": [
+        { "body": { "type": "snapshot", "orderId": "{{query.orderId}}" } },
+        { "delayMs": 2000, "body": { "type": "status", "status": "shipped" } }
+      ],
+      "onMessage": { "mode": "echo" },
+      "interval": { "everyMs": 5000, "body": { "type": "tick", "ts": "{{$now}}" } }
+    }
+  }'
+
+# Connect from any WS client: ws://localhost:33233/ws/orders?orderId=A1001
 ```
 
 ### Docker
@@ -155,6 +178,20 @@ Routes with `crud` enabled respond with resource semantics (in-memory only, rese
 - **Per-service isolation**: the store key is `serviceId` + the path with parameter segments stripped — collection/item routes of the same shape within one service share one store, while identically shaped paths across services stay isolated
 - **Store visibility**: `GET /__polymock/crud` inspects every service's collections with their records, `DELETE /__polymock/crud` (optionally `?serviceId=&collection=`) clears them; the web console exposes both on each CRUD collection group, along with one-click creation of the companion list/create/detail/update/delete routes
 
+### WebSocket routes (protocol = "ws")
+
+On top of HTTP mocking, PolyMock offers **protocol-native** WS mocking over the standard WebSocket upgrade handshake (no client library swap needed):
+
+- **Registration**: send `protocol: "ws"` to the admin API (the method is auto-set to `WS`) with `name` / `path` required; behaviour lives in the `ws` sub-object. `WS /ws/orders` and `GET /ws/orders` can coexist (the method is part of the registry key), and WS cards live in the same service group as HTTP cards, sharing the same port
+- **Handshake & admission**: matched and enabled → `101 Switching Protocols`; unknown / disabled path → `404` then close; failed auth (reusing `auth` Bearer / APIKey, credentials read from handshake headers; browsers cannot send custom handshake headers, so `?token=<value>` works as an equivalent credential) → `401` then close. Both failures **never reach** the HTTP mock dispatch and **never** hit the proxy
+- **HTTP / WS isolation**: an HTTP request to a path registered as WS (including `:param` shapes) gets an explicit 404 (asking the client to connect over WebSocket) and is **never proxied**, so a configured WS mock cannot silently forward to the real backend; an HTTP route on the same path (e.g. `GET /ws/orders`) can be registered separately and coexists with the WS route
+- **onOpen pushes**: an ordered message list (each entry = `delayMs` relative delay + `body`); `loopOnOpen` replays the whole sequence in a loop
+- **onMessage replies**: `echo` (reply verbatim) / `fixed` (first of `replies`) / `sequence` (cycle through `replies` per incoming message) / `none`. Content-based conditional matching is intentionally out of scope for v1 (it would be a second matching engine)
+- **Interval pushes**: `{ everyMs, body }` (100–60000 ms); timers are destroyed together with the connection on close or route change
+- **Message templates**: string bodies are sent verbatim after template rendering (context = `query` + `header` + `params` + `$` helpers, no `body`); other values are JSON-serialised and deep-rendered
+- **Change semantics**: editing / disabling / deleting a WS route closes its live connections with close code `1012` (Service Restart) so clients reconnect onto the new script; deleting a service destroys its connections immediately (`stop` has a timeout fallback and never hangs)
+- **Logs & snapshots**: only **connection-level** logs are written (`method: "WS"`, `status` 101/401/404, with `ws.connectionId` / frame counters / `closeCode` recorded at close); frames are never persisted (so interval pushes cannot flush the HTTP request log). `GET /__polymock/ws/connections` returns a live connection snapshot, visualised in the console's "WS debug" view
+
 ### Debugging
 
 - **Request log**: a 500-entry ring buffer recording method/path/query/body preview/status/duration, annotated with the matched route and variant (or the proxy pass-through and failure reason)
@@ -179,13 +216,14 @@ Routes with `crud` enabled respond with resource semantics (in-memory only, rese
 
 ## Web Console
 
-Open <http://localhost:33233> in a browser and switch between three views in the sidebar (your choice is remembered):
+Open <http://localhost:33233> in a browser and switch between four views in the sidebar (your choice is remembered):
 
 | View | Description |
 | --- | --- |
-| **Routes** | Service groups (create/delete, port, basePath, running status, a header chip to set proxy pass-through) and route cards (method color, condition summary, variant list, effective response Content-Type); CRUD routes are grouped by collection (the group header opens a data modal and deletes the whole collection); the create/edit drawer is organised as five cards — **Basics / Request admission / Response branches / Advanced options / Match preview**: "Request admission" turns the conditions that used to sit on the default response into a shared gate (the switch is `requireMatch`, the status dropdown is `gateStatus`; collapsed by default, with a header badge showing on/off), with condition rows laid out as source / parameter name / operator (exists · equals · non-empty · regex) / value (the type dropdown appears only for "equals", and the enabled/required checkboxes stay), and Body offering field containment / full JSON equality / verbatim text equality; "Response branches" is edited per tab (the default response is the fallback and carries no conditions; drag the branch tabs to reorder the match priority, and the delete button sits at the top-right of the branch panel) and custom response headers live behind the "enable custom response headers" switch in "Advanced options" (which also holds auth, delay/jitter/failure rate, sequence responses and the CRUD switch — CRUD can create its companion list/create/detail/update/delete routes in one click); "Match preview" is a purely client-side walkthrough (body parsing → path → auth → request admission → sequence response → global scene set → branch → default response) that sends no real request; body semantics mirror the backend — the test Body is parsed as JSON only when the test headers carry `Content-Type: application/json` (or `*+json`), and invalid or top-level scalar JSON is treated as a parser 400 rejection; the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
+| **Routes** | Service groups (create/delete, port, basePath, running status, a header chip to set proxy pass-through) and route cards (method color, condition summary, variant list, effective response Content-Type); WS cards share the same service group as HTTP cards (purple WS badge, a one-line monospace script summary, auth / disabled / live-connection status chips, and a `<details>`-collapsed script detail with connection notes); the content area of both HTTP and WS cards (response body / script steps) is collapsed by default, with a single-line truncated preview on the summary row; CRUD routes are grouped by collection (the group header opens a data modal and deletes the whole collection); the create/edit drawer is organised as five cards — **Basics / Request admission / Response branches / Advanced options / Match preview**: "Request admission" turns the conditions that used to sit on the default response into a shared gate (the switch is `requireMatch`, the status dropdown is `gateStatus`; collapsed by default, with a header badge showing on/off), with condition rows laid out as source / parameter name / operator (exists · equals · non-empty · regex) / value (the type dropdown appears only for "equals", and the enabled/required checkboxes stay), and Body offering field containment / full JSON equality / verbatim text equality; "Response branches" is edited per tab (the default response is the fallback and carries no conditions; drag the branch tabs to reorder the match priority, and the delete button sits at the top-right of the branch panel) and custom response headers live behind the "enable custom response headers" switch in "Advanced options" (which also holds auth, delay/jitter/failure rate, sequence responses and the CRUD switch — CRUD can create its companion list/create/detail/update/delete routes in one click); "Match preview" is a purely client-side walkthrough (body parsing → path → auth → request admission → sequence response → global scene set → branch → default response) that sends no real request; body semantics mirror the backend — the test Body is parsed as JSON only when the test headers carry `Content-Type: application/json` (or `*+json`), and invalid or top-level scalar JSON is treated as a parser 400 rejection; the "create/edit WS route" drawer is organised as five sections — **Basics / Handshake & admission / ① onOpen pushes / ② onMessage replies / ③ interval pushes** — with a disable switch and a 1012-reconnect note at the bottom; the sidebar switches the global scene set with one click; includes an OpenAPI import drawer |
+| **WS debug** | Visual debugging for WS routes: a connection bar (target-route dropdown + editable URL + connect/disconnect), a live connection list (polling `/ws/connections` with connection id, peer, frame counters), a send box (JSON validation + quick fills), and a frame timeline (↑ out / ↓ in / ⇄ system, clearable); frames stay in the current page and never enter the HTTP request log |
 | **Embed test** | Load any page URL into a resizable iframe container (drag the right/bottom/bottom-right edges, fill the stage, open in a new tab) to verify your page against the mocks without leaving the console |
-| **Request log** | Log list with filters (status/service/path keyword), a live (SSE) / polling badge, and actions to replay, copy curl, clear, or save a proxied entry as a route |
+| **Request log** | Log list with filters (status/service/path keyword), a live (SSE) / polling badge, and actions to replay, copy curl, clear, or save a proxied entry as a route; WS connection-level entries (method = WS) show up here too |
 
 ## Admin API
 
@@ -199,16 +237,17 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 | DELETE | `/__polymock/services/:id` | Delete a service group (the default service cannot be deleted) |
 | PUT | `/__polymock/services/:id/basePath` | Update a service's basePath prefix (path mode), body `{ basePath }` |
 | PUT | `/__polymock/services/:id/proxy` | Set the proxy target, body `{ target }` (`null` or empty string clears it) |
-| GET | `/__polymock/routes` | List routes; optional `?serviceId=` filter |
-| POST | `/__polymock/routes` | Register a route (requires `name` / `method` / `path`; path must start with `/`) |
-| PUT | `/__polymock/routes/:id` | Update a route; supports patch semantics — send only the fields to change |
-| DELETE | `/__polymock/routes` | Delete by `?method=&path=&serviceId=` |
+| GET | `/__polymock/routes` | List routes; optional `?serviceId=` filter (includes WS routes, distinguished by `protocol`) |
+| POST | `/__polymock/routes` | Register a route (requires `name` / `method` / `path`; path must start with `/`); with `protocol: "ws"` registers a WS route (method auto-set to `WS`, behaviour in the `ws` sub-object, HTTP-specific fields rejected with 400) |
+| PUT | `/__polymock/routes/:id` | Update a route; supports patch semantics — send only the fields to change (WS routes accept `ws` updates; send `null` to clear; `protocol` cannot change) |
+| DELETE | `/__polymock/routes` | Delete by `?method=&path=&serviceId=` (WS routes use `method=WS`) |
 | GET | `/__polymock/requests` | Request log; optional `?serviceId=` and `?limit=` (default 100, max 500), newest first |
 | DELETE | `/__polymock/requests` | Clear the request log |
 | GET | `/__polymock/settings` | Read global settings (currently `activeVariant`) |
 | PUT | `/__polymock/settings` | Update global settings, body `{ activeVariant }` (empty string clears it) |
 | GET | `/__polymock/crud` | Inspect stateful CRUD collection stores: `{ collections: [{ serviceId, collection, count, records }] }` (in-memory, reset on restart) |
 | DELETE | `/__polymock/crud` | Clear CRUD collection stores; optional `?serviceId=&collection=` filters (individually or combined), returns the number of cleared records as `cleared` |
+| GET | `/__polymock/ws/connections` | Snapshot of live WS connections (read-only): `{ connections: [{ id, serviceId, routeId, path, remoteAddress, connectedAt, framesIn, framesOut }] }` |
 | GET | `/__polymock/events` | SSE stream of request logs (`event: log`, data is the entry JSON) |
 
 > When `POLYMOCK_ADMIN_TOKEN` is set, all of the above require the `x-polymock-token` header or a `?token=` query parameter, otherwise 401.
@@ -276,7 +315,9 @@ Key fields:
 | --- | --- |
 | `version` | Schema version, currently `2` |
 | `services[]` | Service groups: `id` / `name` / `port` / `createdAt`, optional `proxyTarget`; in path mode non-default services are hosted by their `basePath` prefix instead (`port` unused, set to `0`); **the `default` service's `port` is the main port — edit it and restart to take effect** |
-| `routes[].method` / `path` | HTTP method and path; paths support `:param` segments |
+| `routes[].method` / `path` | HTTP method and path (WS routes fix the method to `WS`); paths support `:param` segments |
+| `routes[].protocol` | Protocol: `http` (default) = HTTP mock; `ws` = WebSocket mock (behaviour in the `ws` field; HTTP fields like `response` are never stored) |
+| `routes[].ws` | WS behaviour: `onOpen[]` (ordered `{ delayMs?, body }` pushes), `loopOnOpen` (replay the sequence), `onMessage` (`{ mode: echo/fixed/sequence/none, replies? }` reply policy), `interval` (`{ everyMs, body }` interval push, 100–60000 ms) |
 | `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body`; the body is strictly validated in JSON mode and stored verbatim as text when the effective Content-Type is non-JSON |
 | `routes[].request` / `requireMatch` / `gateStatus` | Request admission: expected request conditions, the admission switch, and the failure status (`gateStatus` defaults to `400`; `404` hides the route, `422` is also allowed). Condition rows accept a `match` operator (`exists` / `equals` / `nonEmpty` / `regex`; omitted keeps the historical semantics); the body can be matched as a whole via `bodyMatch` (`subset` default / `deepEqual` / `textEqual`) plus `bodyRaw` (the expected full JSON for `deepEqual`, the expected verbatim text for `textEqual`; ignored under `subset`) |
 | `routes[].variants[]` | Response variants ("response branches" in the console): `name` / `match?` (omitted = always matches; the condition shape is the same as `request`) / `response` |
@@ -318,7 +359,7 @@ Test coverage by area:
 - **Backend** (`src/**/*.test.ts`): unit tests for registry / store / template plus integration tests over real HTTP (`fetch` + ephemeral ports) — Express internals are never mocked; includes security cases for the admin token and proxy allowlist
 - **Frontend** (`web/src/*.test.ts`): pure-function unit tests (OpenAPI parsing, snippet generation, condition table conversion, sequence draft parsing, Java entity generation)
 - **smoke** (`scripts/smoke.mjs`): spawns `dist/index.js` on a random free port with a temp config file, then asserts the default route, templates and delay, 404 after disable, forced scene set, and the request log — any failure exits non-zero
-- **E2E** (`e2e/*.spec.ts`): Playwright drives a real Chromium to cover the console loading, drawer-based register/call/delete, path-param templates, and the request log view (`pnpm test:e2e`)
+- **E2E** (`e2e/*.spec.ts`): Playwright drives a real Chromium to cover the console loading, drawer-based register/call/delete, path-param templates, the request log view, and WS route creation plus debug-console connect/echo/disabled-handshake (`pnpm test:e2e`)
 
 ## CI
 
@@ -328,7 +369,8 @@ Releases run on a dedicated pipeline (`.github/workflows/release.yml`): pushing 
 
 ## Roadmap
 
-- **WebSocket mocking** (planned, not yet implemented): simulation and record/replay for WS endpoints on top of the existing HTTP capabilities
+- **WS proxy pass-through and record/replay**: capture real backend WebSocket traffic and replay it (v1 WS mocking already covers push scripts / replies / interval pushes)
+- **WS content-based conditional matching**: would introduce a second matching engine; pending design review
 
 ## License
 

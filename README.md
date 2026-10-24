@@ -2,16 +2,17 @@
 
 [English](./README.en.md) | 简体中文
 
-> 本地 HTTP Mock 服务器：多服务分组（独立端口或路径前缀）、运行时注册接口、请求条件匹配、响应场景切换——为前端本地开发与联调而设计。
+> 本地 HTTP / WebSocket Mock 服务器：多服务分组（独立端口或路径前缀）、运行时注册接口、请求条件匹配、响应场景切换、WS 推送剧本——为前端本地开发与联调而设计。
 
 ## 项目简介
 
-日常开发中，被依赖的后端接口往往部署在内网，开发者需要在内外网之间频繁切换，联调成本高。PolyMock 在本地模拟这些 HTTP 接口：请求指向 PolyMock 即可完成开发与自测，联调时把地址切回真实后端即可，无需改代码。
+日常开发中，被依赖的后端接口往往部署在内网，开发者需要在内外网之间频繁切换，联调成本高。PolyMock 在本地模拟这些接口：请求指向 PolyMock 即可完成开发与自测，联调时把地址切回真实后端即可，无需改代码。
 
 它不是静态的假数据工具，而是一个**可运行时管理接口的本地服务**：
 
-- 接口通过 Web 控制台或管理 API 随时注册、修改、启停，无需重启
+- HTTP / WS 接口通过 Web 控制台或管理 API 随时注册、修改、启停，无需重启
 - 同一接口可定义多个响应场景（变体），按请求条件自动分流，或一键全局切换
+- WS 接口支持连接后推送（onOpen）、收到消息回包（echo / 固定 / 按序）与定时推送，配套可视化调试台
 - 未注册的请求可穿透代理到真实后端，Mock 与真实接口无缝衔接
 
 技术栈：Node.js 22.13+ / TypeScript / Express 5（后端），Vue 3 + Vite（Web 控制台），Vitest（测试）。包管理器为 pnpm。
@@ -78,6 +79,28 @@ curl -X POST http://localhost:33233/__polymock/routes \
 
 curl http://localhost:33233/api/orders                                    # {"role":"default"}
 curl -H "X-Role: admin" http://localhost:33233/api/orders                 # {"role":"admin"}
+```
+
+注册一个 WS 接口（连接后推送两步、收到消息原样回显、每 5 秒定时推送）：
+
+```bash
+curl -X POST http://localhost:33233/__polymock/routes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "ws",
+    "name": "订单状态推送",
+    "path": "/ws/orders",
+    "ws": {
+      "onOpen": [
+        { "body": { "type": "snapshot", "orderId": "{{query.orderId}}" } },
+        { "delayMs": 2000, "body": { "type": "status", "status": "shipped" } }
+      ],
+      "onMessage": { "mode": "echo" },
+      "interval": { "everyMs": 5000, "body": { "type": "tick", "ts": "{{$now}}" } }
+    }
+  }'
+
+# 浏览器 / 任意 WS 客户端连接 ws://localhost:33233/ws/orders?orderId=A1001
 ```
 
 ### Docker
@@ -155,6 +178,20 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 - **按服务隔离**：存储键为 `serviceId` + 去掉参数段后的集合路径，同服务同形状的集合/条目路由共享一份数据，不同服务同形状路径互不可见
 - **存储可视化**：`GET /__polymock/crud` 查看各服务集合的资源明细，`DELETE /__polymock/crud`（可选 `?serviceId=&collection=` 过滤）清空；Web 控制台的集合分组卡片内可直接查看与清空
 
+### WebSocket 接口（protocol = "ws"）
+
+在 HTTP Mock 之外提供**协议原生**的 WS Mock（基于标准 WebSocket 升级握手，无需客户端换库）：
+
+- **注册**：管理 API 传 `protocol: "ws"`（method 自动为 `WS`），必填 `name` / `path`；`ws` 子对象配置行为。`WS /ws/orders` 与 `GET /ws/orders` 可共存（method 是注册表键的一部分），WS 接口与 HTTP 卡片同处一个服务分组、共享同一端口
+- **握手与准入**：命中且启用 → `101 Switching Protocols`；路径未注册 / 已停用 → 返回 `404` 后关闭；认证失败（复用 `auth` 的 Bearer / APIKey，凭证取自握手头；浏览器握手无法携带自定义头，可在地址后附加 `?token=<值>` 作为等价凭证）→ 返回 `401` 后关闭。两种失败均**不进入** HTTP Mock 分发，也**不走代理**
+- **HTTP 与 WS 隔离**：HTTP 请求打到已注册为 WS 的路径（含 `:param` 形状）返回明确 404（提示需以 WebSocket 协议连接），**不走代理**，避免「配了 WS mock 却把请求静默打到真实后端」；同路径的 HTTP 接口可另行注册（如 `GET /ws/orders`），与 WS 接口共存互不冲突
+- **连接后推送 onOpen**：有序消息列表（每条 = `delayMs` 相对延迟 + `body`），`loopOnOpen` 循环播放整个序列
+- **收到消息回包 onMessage**：`echo` 原样回显 / `fixed` 固定回包（取 `replies` 第一条）/ `sequence` 按收到的消息次序循环取用 / `none` 不回包。第一版**不做**按消息内容的条件匹配（那会是第二套匹配引擎）
+- **定时推送 interval**：`{ everyMs, body }`（100-60000ms）；连接关闭或路由变更时定时器一并销毁
+- **消息模板**：`body` 为字符串时原样发送并渲染模板（上下文为 `query` + `header` + `params` + `$` 系列，无 `body`）；其余值 JSON 序列化后深度渲染
+- **变更生效**：编辑 / 停用 / 删除 WS 接口后，存量连接以 close code `1012`（Service Restart）关闭，客户端重连即取新剧本；删除服务时连接立即销毁（`stop` 带超时兜底，不会挂起）
+- **日志与快照**：只写**连接级**日志（`method: "WS"`，`status` 101/401/404，close 时记录 `ws.connectionId` / 收发帧计数 / `closeCode`）；帧级不持久化（避免定时推送冲掉 HTTP 请求日志）。`GET /__polymock/ws/connections` 返回活跃连接快照，Web 控制台「WS 调试台」实时展示
+
 ### 调试
 
 - **请求日志**：环形缓冲 500 条，记录方法/路径/query/body 摘要/状态码/耗时，并标注命中的接口与变体（或代理穿透、失败原因）
@@ -179,13 +216,14 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 ## Web 控制台
 
-启动后浏览器打开 <http://localhost:33233>，左侧边栏切换三个视图（选择会记忆）：
+启动后浏览器打开 <http://localhost:33233>，左侧边栏切换四个视图（选择会记忆）：
 
 | 视图 | 说明 |
 | --- | --- |
-| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态，头部徽标快捷设置代理穿透）与接口卡片（方法色标、条件摘要、变体列表）；CRUD 路由按集合分组展示（组头可弹窗查看集合数据、整集合删除）；「新增/编辑接口」抽屉重构为五段卡片——**基本信息 / 请求准入 / 响应分支 / 高级选项 / 匹配预览**：「请求准入」把原先挂在默认响应上的条件独立成共享门槛（开关即 `requireMatch`，失败码下拉即 `gateStatus`；默认折叠，折叠态头部徽标显示已开启 / 已关闭），条件行为「来源 / 参数名 / 操作符（存在·等于·非空·正则）/ 值」，类型下拉仅在「等于」时出现，保留启用与必填勾选，Body 支持字段包含 / 完整 JSON 相等 / 原文全文相等三种策略；「响应分支」按 Tab 编辑（默认响应为 fallback、不写条件，分支标签可拖动调整匹配顺序，删除按钮在分支框体右上角），自定义响应头收进「高级选项」的「启用自定义响应头」开关（认证、延迟/抖动/故障率、序列响应、CRUD 开关同在该段，CRUD 开启后可一键创建配套的列表/创建/详情/更新/删除路由）；「匹配预览」是纯前端本地推演（请求体解析 → 路径 → 认证 → 请求准入 → 序列响应 → 全局场景集 → 分支 → 默认响应），不发送真实请求；请求体语义与后端一致——Body 仅在测试请求头含 `Content-Type: application/json`（或 `*+json`）时按 JSON 解析参与匹配，非法或顶层标量 JSON 按解析器 400 拒绝；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
+| **接口管理** | 服务分组列表（新建/删除/端口或 basePath/运行状态，头部徽标快捷设置代理穿透）与接口卡片（方法色标、条件摘要、变体列表）；WS 接口卡片与 HTTP 卡片同处一个服务分组（紫色 WS 徽章、一行等宽剧本摘要、认证 / 停用 / 连接数状态 chip、`<details>` 折叠的剧本详情与连接说明）；HTTP 与 WS 卡片的内容区（响应体 / 剧本步骤）统一默认折叠，折叠行带单行截断预览；CRUD 路由按集合分组展示（组头可弹窗查看集合数据、整集合删除）；「新增/编辑接口」抽屉重构为五段卡片——**基本信息 / 请求准入 / 响应分支 / 高级选项 / 匹配预览**：「请求准入」把原先挂在默认响应上的条件独立成共享门槛（开关即 `requireMatch`，失败码下拉即 `gateStatus`；默认折叠，折叠态头部徽标显示已开启 / 已关闭），条件行为「来源 / 参数名 / 操作符（存在·等于·非空·正则）/ 值」，类型下拉仅在「等于」时出现，保留启用与必填勾选，Body 支持字段包含 / 完整 JSON 相等 / 原文全文相等三种策略；「响应分支」按 Tab 编辑（默认响应为 fallback、不写条件，分支标签可拖动调整匹配顺序，删除按钮在分支框体右上角），自定义响应头收进「高级选项」的「启用自定义响应头」开关（认证、延迟/抖动/故障率、序列响应、CRUD 开关同在该段，CRUD 开启后可一键创建配套的列表/创建/详情/更新/删除路由）；「匹配预览」是纯前端本地推演（请求体解析 → 路径 → 认证 → 请求准入 → 序列响应 → 全局场景集 → 分支 → 默认响应），不发送真实请求；请求体语义与后端一致——Body 仅在测试请求头含 `Content-Type: application/json`（或 `*+json`）时按 JSON 解析参与匹配，非法或顶层标量 JSON 按解析器 400 拒绝；「新增/编辑 WS 接口」抽屉按五区块组织——**基本 / 握手与准入 / ① 连接后推送（onOpen） / ② 收到消息时（onMessage） / ③ 定时推送（interval）**，底部含停用开关与 1012 重连提示；侧边栏可一键切换全局场景集；支持 OpenAPI 导入抽屉 |
+| **WS 调试台** | 面向 WS 接口的可视化调试：连接条（目标接口下拉 + 可编辑连接地址 + 连接/断开）、实时连接列表（轮询 `/ws/connections`，含连接 id、对端、收发帧计数）、发送消息框（JSON 自动校验 + 快捷示例）、帧时间线（↑ 出 / ↓ 入 / ⇄ 系统，可清空）；帧只保存在当前页面，不写进 HTTP 请求日志 |
 | **嵌入测试** | 输入任意页面地址，将其嵌入可拖拽调整宽高的 iframe 容器中（右/下/右下边缘拖拽、一键铺满、新标签页打开），便于在控制台内直接验证页面与 Mock 的联调效果 |
-| **请求日志** | 日志列表与过滤（状态/服务/路径关键字），实时（SSE）/轮询模式徽标，支持重放、复制 curl、清空、把代理条目保存为接口 |
+| **请求日志** | 日志列表与过滤（状态/服务/路径关键字），实时（SSE）/轮询模式徽标，支持重放、复制 curl、清空、把代理条目保存为接口；WS 连接级日志（method = WS）同样展示 |
 
 ## 管理 API
 
@@ -199,16 +237,17 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | DELETE | `/__polymock/services/:id` | 删除服务分组（默认服务不可删除） |
 | PUT | `/__polymock/services/:id/basePath` | 修改服务 basePath 前缀（路径模式），body `{ basePath }` |
 | PUT | `/__polymock/services/:id/proxy` | 设置代理穿透目标，body `{ target }`（`null` 或空串清除） |
-| GET | `/__polymock/routes` | 接口列表，可选 `?serviceId=` 过滤 |
-| POST | `/__polymock/routes` | 注册接口（必填 `name` / `method` / `path`，path 以 `/` 开头） |
-| PUT | `/__polymock/routes/:id` | 更新接口，支持 patch：只传需要修改的字段 |
-| DELETE | `/__polymock/routes` | 按 `?method=&path=&serviceId=` 删除接口 |
+| GET | `/__polymock/routes` | 接口列表，可选 `?serviceId=` 过滤（含 WS 路由，`protocol` 区分） |
+| POST | `/__polymock/routes` | 注册接口（必填 `name` / `method` / `path`，path 以 `/` 开头）；`protocol: "ws"` 时注册 WS 接口（method 自动为 `WS`，行为配置在 `ws` 子对象，HTTP 专属字段拒收 400） |
+| PUT | `/__polymock/routes/:id` | 更新接口，支持 patch：只传需要修改的字段（WS 接口支持更新 `ws`，传 `null` 清除；`protocol` 不可变更） |
+| DELETE | `/__polymock/routes` | 按 `?method=&path=&serviceId=` 删除接口（WS 接口 `method=WS`） |
 | GET | `/__polymock/requests` | 请求日志，可选 `?serviceId=` 与 `?limit=`（默认 100，上限 500），按新到旧排序 |
 | DELETE | `/__polymock/requests` | 清空请求日志 |
 | GET | `/__polymock/settings` | 读取全局设置（当前仅 `activeVariant`） |
 | PUT | `/__polymock/settings` | 更新全局设置，body `{ activeVariant }`（空串视为清除） |
 | GET | `/__polymock/crud` | 查看有状态 CRUD 集合存储：`{ collections: [{ serviceId, collection, count, records }] }`（内存态，重启即清） |
 | DELETE | `/__polymock/crud` | 清空 CRUD 集合存储；可选 `?serviceId=&collection=` 过滤（可单独或组合指定），返回清理的资源条数 `cleared` |
+| GET | `/__polymock/ws/connections` | WS 活跃连接快照（只读）：`{ connections: [{ id, serviceId, routeId, path, remoteAddress, connectedAt, framesIn, framesOut }] }` |
 | GET | `/__polymock/events` | SSE 实时推送请求日志（`event: log`，data 为日志条目 JSON） |
 
 > 设置 `POLYMOCK_ADMIN_TOKEN` 后，以上接口均需携带 `x-polymock-token` 请求头或 `?token=` 查询参数，否则 401。
@@ -276,7 +315,9 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | --- | --- |
 | `version` | schema 版本，当前为 `2` |
 | `services[]` | 服务分组：`id` / `name` / `port` / `createdAt`，可选 `proxyTarget`（代理穿透目标）；路径模式下非默认服务改由 `basePath` 前缀承载（`port` 不使用，置 `0`）；**`default` 服务的 `port` 即主端口，改后重启生效** |
-| `routes[].method` / `path` | HTTP 方法与路径，path 支持 `:param` 参数段 |
+| `routes[].method` / `path` | HTTP 方法与路径（WS 路由 method 固定 `WS`），path 支持 `:param` 参数段 |
+| `routes[].protocol` | 协议：`http`（缺省）= HTTP Mock；`ws` = WebSocket Mock（行为配置在 `ws` 字段，`response` 等 HTTP 字段不落库） |
+| `routes[].ws` | WS 行为配置：`onOpen[]`（`{ delayMs?, body }` 有序推送）、`loopOnOpen`（循环播放）、`onMessage`（`{ mode: echo/fixed/sequence/none, replies? }` 回包策略）、`interval`（`{ everyMs, body }` 定时推送，100-60000ms） |
 | `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body`；body 在 JSON 模式严格校验，生效 Content-Type 为非 JSON 时为原样文本 |
 | `routes[].request` / `requireMatch` / `gateStatus` | 请求准入：预期请求条件、准入开关与失败状态码（`gateStatus` 缺省 `400`，可选 `404` 隐藏接口 / `422`）。条件行可选 `match` 操作符（`exists` / `equals` / `nonEmpty` / `regex`，缺省沿用历史语义）；body 可整体匹配：`bodyMatch`（`subset` 缺省 / `deepEqual` / `textEqual`）+ `bodyRaw`（`deepEqual` 为期望的完整 JSON 文本、`textEqual` 为期望原文，`subset` 下忽略） |
 | `routes[].variants[]` | 响应变体（控制台的「响应分支」）：`name` / `match?`（缺省=总是命中，条件结构与 `request` 相同）/ `response` |
@@ -318,7 +359,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 - **后端**（`src/**/*.test.ts`）：registry / store / template 的单元测试，加上走真实 HTTP（`fetch` + 临时端口）的集成测试，不 mock Express 内部；含管理令牌与代理白名单的安全加固用例
 - **前端**（`web/src/*.test.ts`）：纯函数单测（OpenAPI 解析、代码片段生成、条件表格转换、序列草稿解析、Java 实体生成）
 - **smoke**（`scripts/smoke.mjs`）：以随机空闲端口 + 临时配置文件启动 `dist/index.js`，依次断言默认路由、模板与延迟、禁用后 404、场景集强制命中、请求日志，任一失败即退出非零
-- **E2E**（`e2e/*.spec.ts`）：Playwright 驱动真实 Chromium，覆盖控制台加载、抽屉注册/调用/删除、路径参数模板与请求日志视图（`pnpm test:e2e`）
+- **E2E**（`e2e/*.spec.ts`）：Playwright 驱动真实 Chromium，覆盖控制台加载、抽屉注册/调用/删除、路径参数模板与请求日志视图、WS 接口创建与调试台连接/回显/停用握手失败（`pnpm test:e2e`）
 
 ## CI
 
@@ -328,7 +369,8 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 ## Roadmap（规划）
 
-- **WebSocket 接口 Mock**（规划中，尚未实现）：在现有 HTTP 能力之外，提供 WS 接口的模拟与录制回放
+- **WS 代理透传与录制回放**：把真实后端的 WebSocket 流量录制下来回放（当前 WS Mock 覆盖推送剧本 / 回包 / 定时，已在第一版实现）
+- **WS 按消息内容的条件匹配**：会引入第二套匹配引擎，待设计评审后评估
 
 ## License
 
