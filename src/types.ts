@@ -124,14 +124,44 @@ export interface Service {
   basePath?: string;
 }
 
+/** WS 连接后推送的单条消息：字符串原样发送（支持模板），其余 JSON 序列化后发送 */
+export interface WsMessage {
+  /** 相对上一条（首条相对连接建立）的延迟毫秒，0-60000，缺省 0 */
+  delayMs?: number;
+  body: unknown;
+}
+
+/** WS 回包策略：echo 原样回显 / fixed 固定回包（取第一条）/ sequence 按收到的消息次序循环取用 / none 不回包 */
+export interface WsOnMessage {
+  mode: 'echo' | 'fixed' | 'sequence' | 'none';
+  /** fixed / sequence 模式的回包内容；echo / none 下不存储 */
+  replies?: unknown[];
+}
+
+/** WS 路由专属行为配置（protocol = 'ws' 时生效） */
+export interface WsBehavior {
+  /** 连接成功后按序推送 */
+  onOpen?: WsMessage[];
+  /** 循环播放整个 onOpen 序列，缺省 false */
+  loopOnOpen?: boolean;
+  /** 收到消息时的回包策略；缺省不回包 */
+  onMessage?: WsOnMessage;
+  /** 定时推送：连接关闭或路由变更时定时器一并销毁 */
+  interval?: { everyMs: number; body: unknown };
+}
+
 export interface Route {
   id: string;
   serviceId: string;
-  protocol: 'http';
+  /** 协议：http = HTTP Mock（缺省）；ws = WebSocket Mock（method 固定 'WS'，upgrade 网关专用） */
+  protocol: 'http' | 'ws';
   method: string;
   path: string;
   name?: string;
-  response: RouteResponse;
+  /** HTTP Mock 响应；WS 路由不使用（其行为配置在 ws 字段） */
+  response?: RouteResponse;
+  /** WS 专属行为配置；HTTP 路由不使用 */
+  ws?: WsBehavior;
   /** 默认响应的前置条件；仅 requireMatch 为 true 时作为接口准入门槛参与校验 */
   request?: RouteRequest;
   /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则按 gateStatus 返回 */
@@ -194,4 +224,6 @@ export interface RequestLogEntry {
   proxyBody?: string;
   /** 上游响应 Content-Type（代理时），「保存为接口」据此判定 JSON/文本模式 */
   proxyContentType?: string;
+  /** WS 连接级信息（method = 'WS' 的日志条目携带）；帧级不持久化 */
+  ws?: { connectionId: string; framesIn: number; framesOut: number; closeCode?: number };
 }

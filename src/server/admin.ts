@@ -2,6 +2,7 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import type { ServiceManagerLike } from './manager.js';
 import type { RequestLogStore } from './request-log.js';
+import type { WsConnectionSnapshot, WsGateway } from './ws-gateway.js';
 import type { RouteRegistry } from '../registry.js';
 import {
   DEFAULT_SERVICE_ID,
@@ -19,6 +20,9 @@ import {
   type RouteResponse,
   type Service,
   type PolyMockMode,
+  type WsBehavior,
+  type WsMessage,
+  type WsOnMessage,
 } from '../types.js';
 
 export interface AdminOptions {
@@ -33,6 +37,8 @@ export interface AdminOptions {
   mode?: PolyMockMode;
   /** 有状态 CRUD 共享存储（key = serviceId\0集合路径）：/crud 端点查看与清空；缺省时返回空列表 */
   crudStores?: Map<string, Map<string, Record<string, unknown>>>;
+  /** 共享 WS 网关：/ws/connections 借此暴露连接快照；缺省返回空列表 */
+  gateway?: WsGateway;
 }
 
 /** 请求日志查询的缺省与上限条数 */
@@ -345,6 +351,111 @@ function validatePathSegments(routePath: string): string | null {
   return null;
 }
 
+/* ---------- WS 路由（protocol = 'ws'）专属解析 ---------- */
+
+/** WS 回包策略白名单 */
+const WS_ONMESSAGE_MODES: readonly WsOnMessage['mode'][] = ['echo', 'fixed', 'sequence', 'none'];
+
+/** WS 路由拒收的 HTTP 专属字段：避免在 WS 路由上留下不生效的「死字段」 */
+const WS_FORBIDDEN_FIELDS: readonly string[] = [
+  'response', 'request', 'requireMatch', 'gateStatus', 'variants', 'sequence',
+  'crud', 'delayMs', 'jitterMs', 'failureRate', 'renderRequest',
+];
+
+/** 消息体：字符串原样保留（发送时做模板渲染，JSON 文本亦按字符串发送），其余透传 */
+function parseWsMessageBody(body: unknown, label: string): ParseResult<unknown> {
+  if (body === undefined || body === null) return { ok: false, error: `${label} 缺少 body` };
+  return { ok: true, value: body };
+}
+
+/** 单条 WS 消息：body 必填，delayMs 可选 0-60000 整数 */
+function parseWsMessage(raw: unknown, label: string): ParseResult<WsMessage> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: `${label} 需为对象（delayMs / body）` };
+  }
+  const source = raw as Record<string, unknown>;
+  const bodyResult = parseWsMessageBody(source.body, label);
+  if (!bodyResult.ok) return bodyResult;
+  if (source.delayMs !== undefined) {
+    if (!Number.isInteger(source.delayMs) || (source.delayMs as number) < 0 || (source.delayMs as number) > 60000) {
+      return { ok: false, error: `${label} 的 delayMs 需为 0-60000 的整数` };
+    }
+  }
+  const delayMs = source.delayMs as number | undefined;
+  return { ok: true, value: { body: bodyResult.value, ...(delayMs !== undefined && delayMs > 0 ? { delayMs } : {}) } };
+}
+
+/** WS 行为配置：onOpen 消息列表 / loopOnOpen / onMessage 回包策略 / interval 定时推送；空配置归一为 undefined */
+function parseWsBehavior(raw: unknown): ParseResult<WsBehavior | undefined> {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'ws 需为对象（onOpen / loopOnOpen / onMessage / interval）' };
+  }
+  const source = raw as Record<string, unknown>;
+  const result: WsBehavior = {};
+
+  if (source.loopOnOpen !== undefined && typeof source.loopOnOpen !== 'boolean') {
+    return { ok: false, error: 'ws.loopOnOpen 需为布尔值' };
+  }
+  if (source.onOpen !== undefined) {
+    if (!Array.isArray(source.onOpen)) return { ok: false, error: 'ws.onOpen 需为数组' };
+    const messages: WsMessage[] = [];
+    for (const [index, item] of source.onOpen.entries()) {
+      const parsed = parseWsMessage(item, `ws.onOpen[${index}]`);
+      if (!parsed.ok) return parsed;
+      messages.push(parsed.value);
+    }
+    if (messages.length > 0) {
+      result.onOpen = messages;
+      if (source.loopOnOpen === true) result.loopOnOpen = true;
+    } else if (source.loopOnOpen === true) {
+      return { ok: false, error: 'ws.loopOnOpen 需与非空 ws.onOpen 配合使用' };
+    }
+  } else if (source.loopOnOpen === true) {
+    return { ok: false, error: 'ws.loopOnOpen 需与非空 ws.onOpen 配合使用' };
+  }
+  if (source.onMessage !== undefined) {
+    if (typeof source.onMessage !== 'object' || source.onMessage === null || Array.isArray(source.onMessage)) {
+      return { ok: false, error: 'ws.onMessage 需为对象（mode / replies）' };
+    }
+    const onMessage = source.onMessage as Record<string, unknown>;
+    if (typeof onMessage.mode !== 'string' || !WS_ONMESSAGE_MODES.includes(onMessage.mode as WsOnMessage['mode'])) {
+      return { ok: false, error: `ws.onMessage.mode 需为 ${WS_ONMESSAGE_MODES.join(' / ')}` };
+    }
+    const mode = onMessage.mode as WsOnMessage['mode'];
+    if (mode === 'fixed' || mode === 'sequence') {
+      if (!Array.isArray(onMessage.replies) || onMessage.replies.length === 0) {
+        return { ok: false, error: `ws.onMessage.mode 为 ${mode} 时需提供非空数组 replies` };
+      }
+      result.onMessage = { mode, replies: [...onMessage.replies] };
+    } else if (Array.isArray(onMessage.replies) && onMessage.replies.length > 0) {
+      /* echo / none 不消费 replies：拒收避免留下不生效的配置 */
+      return { ok: false, error: `ws.onMessage.mode 为 ${mode} 时不使用 replies，请移除该字段` };
+    } else {
+      result.onMessage = { mode };
+    }
+  }
+  if (source.interval !== undefined) {
+    if (typeof source.interval !== 'object' || source.interval === null || Array.isArray(source.interval)) {
+      return { ok: false, error: 'ws.interval 需为对象（everyMs / body）' };
+    }
+    const interval = source.interval as Record<string, unknown>;
+    if (!Number.isInteger(interval.everyMs) || (interval.everyMs as number) < 100 || (interval.everyMs as number) > 60000) {
+      return { ok: false, error: 'ws.interval.everyMs 需为 100-60000 的整数' };
+    }
+    const bodyResult = parseWsMessageBody(interval.body, 'ws.interval');
+    if (!bodyResult.ok) return bodyResult;
+    result.interval = { everyMs: interval.everyMs as number, body: bodyResult.value };
+  }
+  const configured = result.onOpen !== undefined || result.onMessage !== undefined || result.interval !== undefined;
+  return { ok: true, value: configured ? result : undefined };
+}
+
+/** WS 路由体中第一个出现的 HTTP 专属字段（400 拒收用） */
+function firstWsForbiddenField(body: Record<string, unknown>): string | undefined {
+  return WS_FORBIDDEN_FIELDS.find((field) => body[field] !== undefined);
+}
+
 /** 解析序列响应列表：每项 status 100-599 整数，body 走 parseResponseBody */
 function parseSequence(raw: unknown): ParseResult<Array<{ status: number; body: unknown; headers?: ResponseHeader[] }>> {
   if (!Array.isArray(raw)) return { ok: false, error: 'sequence 需为数组' };
@@ -645,6 +756,12 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     res.json({ ok: true, cleared });
   });
 
+  // ---- WS 连接快照（只读）：调试台实时连接列表用 ----
+  router.get('/ws/connections', (_req, res) => {
+    const connections: WsConnectionSnapshot[] = options.gateway?.snapshot() ?? [];
+    res.json({ ok: true, connections });
+  });
+
   // ---- 管理 API（接口注册）----
   router.get('/routes', (req, res) => {
     const serviceId = typeof req.query.serviceId === 'string' ? req.query.serviceId : undefined;
@@ -652,7 +769,17 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.post('/routes', (req, res) => {
-    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence, auth } = req.body ?? {};
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { serviceId, name, path: routePath, request, requireMatch, variants, sequence, auth } = body;
+    const response = body.response as { body?: unknown; status?: unknown; contentType?: unknown; headers?: unknown } | undefined;
+    const protocol = body.protocol;
+    if (protocol !== undefined && protocol !== 'http' && protocol !== 'ws') {
+      res.status(400).json({ ok: false, error: 'protocol 需为 http 或 ws' });
+      return;
+    }
+    const isWs = protocol === 'ws';
+    /* WS 接口的 method 固定为 WS：未提供时自动补齐 */
+    const method = typeof body.method === 'string' && body.method ? body.method : isWs ? 'WS' : undefined;
     if (typeof method !== 'string' || typeof routePath !== 'string' || !routePath.startsWith('/')) {
       res.status(400).json({ ok: false, error: 'method 与 path 均为必填字符串，path 需以 / 开头' });
       return;
@@ -687,6 +814,51 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
         res.status(409).json({ ok: false, error: `路径首段 "${firstSegment}" 已被服务「${shadowService.name}」的 basePath 占用，默认服务接口会因此被遮蔽` });
         return;
       }
+    }
+
+    // ---- WS 分支：method 固定 WS，独立校验，不要求 response 等 HTTP 字段 ----
+    if (isWs) {
+      if (method.toUpperCase() !== 'WS') {
+        res.status(400).json({ ok: false, error: 'WS 接口的 method 固定为 WS，无需填写' });
+        return;
+      }
+      const forbidden = firstWsForbiddenField(body);
+      if (forbidden) {
+        res.status(400).json({ ok: false, error: `WS 接口不支持 ${forbidden} 字段（HTTP 专属）` });
+        return;
+      }
+      if (body.disabled !== undefined && typeof body.disabled !== 'boolean') {
+        res.status(400).json({ ok: false, error: 'disabled 需为布尔值' });
+        return;
+      }
+      let wsBehavior: WsBehavior | undefined;
+      if (body.ws !== undefined) {
+        const parsed = parseWsBehavior(body.ws);
+        if (!parsed.ok) {
+          res.status(400).json({ ok: false, error: parsed.error });
+          return;
+        }
+        wsBehavior = parsed.value;
+      }
+      let wsAuth: RouteAuth | undefined;
+      if (auth !== undefined) {
+        const parsed = parseRouteAuth(auth);
+        if (!parsed.ok) {
+          res.status(400).json({ ok: false, error: parsed.error });
+          return;
+        }
+        wsAuth = parsed.value;
+      }
+      const route = registry.addWs(sid, routePath, routeName, wsBehavior, {
+        ...(body.disabled !== undefined ? { disabled: body.disabled as boolean } : {}),
+        ...(wsAuth ? { auth: wsAuth } : {}),
+      });
+      res.status(201).json({ ok: true, route });
+      return;
+    }
+    if (method.toUpperCase() === 'WS') {
+      res.status(400).json({ ok: false, error: 'method WS 需以 protocol:"ws" 创建' });
+      return;
     }
     if (requireMatch !== undefined && typeof requireMatch !== 'boolean') {
       res.status(400).json({ ok: false, error: 'requireMatch 需为布尔值' });
@@ -750,7 +922,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     }
 
     const route = registry.add(sid, method, routePath, {
-      status: response?.status ?? 200,
+      status: typeof response?.status === 'number' ? response.status : 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
       ...(headersParsed.value ? { headers: headersParsed.value } : {}),
       body: bodyParsed.value,
@@ -774,8 +946,46 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   });
 
   router.put('/routes/:id', (req, res) => {
-    const { serviceId, name, method, path: routePath, response, request, requireMatch, variants, sequence, auth } = req.body ?? {};
-    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth'>> = {};
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { serviceId, name, method, path: routePath, request, requireMatch, variants, sequence, auth } = body;
+    const response = body.response as { body?: unknown; status?: unknown; contentType?: unknown; headers?: unknown } | undefined;
+    const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth' | 'ws'>> = {};
+
+    /* 当前路由的协议决定分支校验：WS 路由拒收 HTTP 专属字段，HTTP 路由拒收 ws 字段 */
+    const current = registry.findById(req.params.id);
+    const isWs = current?.protocol === 'ws';
+
+    if (body.protocol !== undefined) {
+      res.status(400).json({ ok: false, error: 'protocol 不可变更（HTTP / WS 接口需各自新建）' });
+      return;
+    }
+    if (isWs) {
+      const forbidden = firstWsForbiddenField(body);
+      if (forbidden) {
+        res.status(400).json({ ok: false, error: `WS 接口不支持 ${forbidden} 字段（HTTP 专属）` });
+        return;
+      }
+      if (method !== undefined && (typeof method !== 'string' || method.toUpperCase() !== 'WS')) {
+        res.status(400).json({ ok: false, error: 'WS 接口的 method 固定为 WS' });
+        return;
+      }
+    } else if (current && typeof method === 'string' && method.toUpperCase() === 'WS') {
+      res.status(400).json({ ok: false, error: 'method WS 需以 protocol:"ws" 创建' });
+      return;
+    }
+    if (body.ws !== undefined) {
+      if (current && current.protocol !== 'ws') {
+        res.status(400).json({ ok: false, error: '仅 WS 接口支持 ws 字段' });
+        return;
+      }
+      /* null 表示清除 ws 配置 */
+      const parsed = body.ws === null ? { ok: true as const, value: undefined } : parseWsBehavior(body.ws);
+      if (!parsed.ok) {
+        res.status(400).json({ ok: false, error: parsed.error });
+        return;
+      }
+      patch.ws = parsed.value;
+    }
 
     if (serviceId !== undefined) {
       if (typeof serviceId !== 'string' || !serviceId) {
@@ -826,7 +1036,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
         return;
       }
       patch.response = {
-        status: response?.status ?? 200,
+        status: typeof response?.status === 'number' ? response.status : 200,
         contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
         ...(headersParsed.value ? { headers: headersParsed.value } : {}),
         body: bodyParsed.value,
@@ -881,7 +1091,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     Object.assign(patch, behaviorParsed.value);
 
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / gateStatus / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud / auth）' });
+      res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / gateStatus / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud / auth / ws）' });
       return;
     }
 

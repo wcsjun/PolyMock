@@ -3,7 +3,7 @@
   "info": {
     "title": "PolyMock 管理 API 与 Mock 分发契约",
     "version": "1.0.0",
-    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足（请求准入失败按路由的 `gateStatus` 返回，缺省 400，可为 404 / 422）；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → 请求准入 requireMatch（失败按 gateStatus，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）",
+    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足（请求准入失败按路由的 `gateStatus` 返回，缺省 400，可为 404 / 422）；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → 请求准入 requireMatch（失败按 gateStatus，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）\n\n## WebSocket 接口\n`POST /__polymock/routes` 传 `protocol: \"ws\"` 注册 WS 接口（method 自动为 WS，行为配置在 ws 子对象）：命中且启用 → 101；未注册/已停用 → 404 关闭；认证失败 → 401 关闭，均不进入 HTTP 分发与代理。编辑/停用/删除后存量连接以 close 1012 关闭。日志只写连接级（method = WS），帧级不持久化。",
     "contact": {
       "name": "PolyMock"
     }
@@ -1162,6 +1162,55 @@
           }
         }
       }
+    },
+    "/__polymock/ws/connections": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "WS 活跃连接快照（只读）",
+        "description": "返回当前全部活跃 WebSocket 连接的快照（不含帧内容）。WS 调试台的实时连接列表每 2 秒轮询该接口。",
+        "responses": {
+          "200": {
+            "description": "连接快照列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "connections"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "connections": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WsConnectionSnapshot"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "缺少管理令牌",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1570,6 +1619,17 @@
           "renderRequest": {
             "type": "boolean",
             "description": "请求体模板渲染：请求体里的模板占位符在匹配前渲染，渲染结果参与 requireMatch/变体条件匹配、响应模板与日志预览。**默认开启（缺省即渲染）**，显式传 false 关闭；仅在命中已注册路由时生效，未命中走代理转发时转发的是原始请求体"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "http",
+              "ws"
+            ],
+            "description": "协议；ws 时注册 WS 接口（method 自动为 WS，HTTP 专属字段拒收 400），缺省 http"
+          },
+          "ws": {
+            "$ref": "#/components/schemas/WsBehavior"
           }
         }
       },
@@ -1579,7 +1639,20 @@
           {
             "$ref": "#/components/schemas/RoutePayload"
           }
-        ]
+        ],
+        "properties": {
+          "ws": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WsBehavior"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "WS 行为配置；null 表示清除"
+          }
+        }
       },
       "Route": {
         "type": "object",
@@ -1589,7 +1662,6 @@
           "protocol",
           "method",
           "path",
-          "response",
           "createdAt"
         ],
         "properties": {
@@ -1602,8 +1674,10 @@
           "protocol": {
             "type": "string",
             "enum": [
-              "http"
-            ]
+              "http",
+              "ws"
+            ],
+            "description": "协议：http = HTTP Mock（缺省）；ws = WebSocket Mock（method 固定 WS，行为配置在 ws 字段）"
           },
           "method": {
             "type": "string"
@@ -1615,7 +1689,8 @@
             "type": "string"
           },
           "response": {
-            "$ref": "#/components/schemas/RouteResponse"
+            "$ref": "#/components/schemas/RouteResponse",
+            "description": "HTTP Mock 默认响应；WS 路由不使用（其行为配置在 ws 字段）"
           },
           "request": {
             "$ref": "#/components/schemas/RouteRequest"
@@ -1669,6 +1744,9 @@
           "createdAt": {
             "type": "integer",
             "format": "int64"
+          },
+          "ws": {
+            "$ref": "#/components/schemas/WsBehavior"
           }
         }
       },
@@ -1760,6 +1838,30 @@
           "proxyContentType": {
             "type": "string",
             "description": "上游响应 Content-Type（代理时），「保存为接口」据此判定 JSON/文本模式"
+          },
+          "ws": {
+            "type": "object",
+            "required": [
+              "connectionId",
+              "framesIn",
+              "framesOut"
+            ],
+            "properties": {
+              "connectionId": {
+                "type": "string"
+              },
+              "framesIn": {
+                "type": "integer"
+              },
+              "framesOut": {
+                "type": "integer"
+              },
+              "closeCode": {
+                "type": "integer",
+                "description": "关闭码（close 时写入；1012 = 路由变更强制重连）"
+              }
+            },
+            "description": "WS 连接级信息（method = WS 的日志条目携带）；帧级不持久化"
           }
         }
       },
@@ -1791,6 +1893,128 @@
               "type": "object",
               "additionalProperties": true
             }
+          }
+        }
+      },
+      "WsMessage": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "delayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000,
+            "description": "相对上一条（首条相对连接建立）的延迟毫秒，缺省 0"
+          },
+          "body": {
+            "description": "消息体：字符串原样发送（支持模板），其余 JSON 序列化后发送"
+          }
+        }
+      },
+      "WsOnMessage": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "echo",
+              "fixed",
+              "sequence",
+              "none"
+            ],
+            "description": "echo 原样回显 / fixed 固定回包（取第一条）/ sequence 按收到的消息次序循环取用 / none 不回包"
+          },
+          "replies": {
+            "type": "array",
+            "items": {},
+            "description": "fixed / sequence 模式的回包内容（非空数组）；echo / none 下不携带"
+          }
+        }
+      },
+      "WsBehavior": {
+        "type": "object",
+        "description": "WS 路由专属行为配置（protocol = ws 时生效）",
+        "properties": {
+          "onOpen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WsMessage"
+            },
+            "description": "连接成功后按序推送"
+          },
+          "loopOnOpen": {
+            "type": "boolean",
+            "description": "循环播放整个 onOpen 序列，缺省 false；需与非空 onOpen 配合"
+          },
+          "onMessage": {
+            "$ref": "#/components/schemas/WsOnMessage"
+          },
+          "interval": {
+            "type": "object",
+            "required": [
+              "everyMs",
+              "body"
+            ],
+            "properties": {
+              "everyMs": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 60000,
+                "description": "定时推送间隔毫秒（100-60000）"
+              },
+              "body": {
+                "description": "定时推送内容"
+              }
+            }
+          }
+        }
+      },
+      "WsConnectionSnapshot": {
+        "type": "object",
+        "required": [
+          "id",
+          "serviceId",
+          "routeId",
+          "path",
+          "remoteAddress",
+          "connectedAt",
+          "framesIn",
+          "framesOut"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "连接 id（c-xxxx 形态）"
+          },
+          "serviceId": {
+            "type": "string"
+          },
+          "routeId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "remoteAddress": {
+            "type": "string",
+            "description": "对端地址"
+          },
+          "connectedAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "framesIn": {
+            "type": "integer",
+            "description": "收到的帧数"
+          },
+          "framesOut": {
+            "type": "integer",
+            "description": "发出的帧数"
           }
         }
       }

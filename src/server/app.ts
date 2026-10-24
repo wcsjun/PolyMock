@@ -6,6 +6,7 @@ import { createAdminRouter, effectiveResponseContentType, isHostAllowed, isJsonC
 import type { RequestLogStore } from './request-log.js';
 import type { ServiceManager } from './manager.js';
 import type { RouteRegistry } from '../registry.js';
+import type { WsGateway } from './ws-gateway.js';
 import { renderString, renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
 import { DEFAULT_SERVICE_ID, type PolyMockMode } from '../types.js';
 import type { RequestCondition, RouteRequest, RouteResponse, ResponseHeader, Route, RouteAuth } from '../types.js';
@@ -27,6 +28,8 @@ export interface MainAppOptions {
   crudStores?: Map<string, Map<string, Record<string, unknown>>>;
   /** CRUD 自动生成 id 的自增计数（key 同 crudStores）；缺省自建 */
   crudCounters?: Map<string, number>;
+  /** 共享 WS 网关：管理端 /ws/connections 借此暴露连接快照；缺省返回空列表 */
+  gateway?: WsGateway;
 }
 
 /** Mock 分发的可选依赖：请求日志与 {{$id}} 自增计数器 */
@@ -381,7 +384,8 @@ export function resolveRouteResponse(
       return { ok: true, response: variant.response, variant: variant.name };
     }
   }
-  return { ok: true, response: route.response, variant: null };
+  /* WS 路由不经 HTTP 分发（dispatch 有协议防御），此处兜底只为满足返回类型 */
+  return { ok: true, response: route.response ?? { status: 200, body: null }, variant: null };
 }
 
 /**
@@ -541,6 +545,19 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     const found = registry.findWithParams(serviceId, req.method, req.path);
     const route = found?.route;
     const routeParams = found?.params ?? {};
+
+    /*
+     * ---- WS 路由专用 upgrade 网关：HTTP 请求打到 WS 路径时返回明确 404 ----
+     * 不走代理转发，避免「配了 WS mock 却把请求静默打到真实后端」难以排查；
+     * method = WS 的字面量请求为防御分支，正常 HTTP 方法只会经下方路径命中检查。
+     */
+    if (route?.protocol === 'ws' || (!route && registry.find(serviceId, 'WS', req.path))) {
+      status = 404;
+      error = `未注册接口: ${req.method} ${req.path}（该路径已注册为 WS 接口，请以 WebSocket 协议连接）`;
+      res.status(404).json({ ok: false, error });
+      writeLog();
+      return;
+    }
 
     /*
      * ---- 请求体模板渲染（默认开启，路由可显式 renderRequest:false 关闭）----
@@ -783,6 +800,7 @@ export function createApp(registry: RouteRegistry, manager: ServiceManager, opti
     proxyAllowHosts: options.proxyAllowHosts,
     mode: options.mode,
     crudStores: deps.crudStores,
+    gateway: options.gateway,
   }));
 
   // ---- 路径模式：/{basePath}/** 剥离前缀后分发到对应服务；未命中前缀回退后续处理（静态资源 / 默认服务）----
@@ -834,4 +852,25 @@ export function createRouteApp(registry: RouteRegistry, serviceId: string, deps?
   app.use(express.json({ limit: '10mb', verify: captureJsonRawBody }));
   app.use(createDispatch(registry, serviceId, deps));
   return app;
+}
+
+/**
+ * 解析主端口 WS upgrade 请求的目标服务与路径：
+ * 路径模式按首段 basePath 前缀剥离开返回该服务（只查默认服务会让其他服务的 WS 全部 404），
+ * 未命中前缀归默认服务；端口模式主端口固定为默认服务。独立端口服务的网关无需解析。
+ */
+export function resolveUpgradeService(
+  registry: RouteRegistry,
+  rawUrl: string,
+  mode: PolyMockMode,
+): { serviceId: string; path: string } {
+  const url = new URL(rawUrl, 'http://polymock.local');
+  if (mode === 'path') {
+    const firstSegment = url.pathname.split('/')[1] ?? '';
+    const service = firstSegment ? registry.findServiceByBasePath(firstSegment) : undefined;
+    if (service) {
+      return { serviceId: service.id, path: url.pathname.slice(firstSegment.length + 1) || '/' };
+    }
+  }
+  return { serviceId: DEFAULT_SERVICE_ID, path: url.pathname };
 }
