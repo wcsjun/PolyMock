@@ -70,6 +70,29 @@ describe('createApp 集成测试', () => {
     expect(body.services[0]).toMatchObject({ id: DEFAULT_SERVICE_ID, isDefault: true, running: true, count: 1 });
   });
 
+  it('管理 API：/meta 携带 stateVersion，注册表变更后自增（前端轮询跳过未变更数据的依据）', async () => {
+    const readVersion = async () => {
+      const res = await fetch(`${server.baseUrl}/__polymock/meta`);
+      const body = (await res.json()) as { ok: boolean; stateVersion: number };
+      expect(body.ok).toBe(true);
+      return body.stateVersion;
+    };
+
+    const before = await readVersion();
+    const reg = await fetch(`${server.baseUrl}/__polymock/routes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '版本探测', method: 'GET', path: '/api/state-version', response: { status: 200, body: { v: 1 } } }),
+    });
+    expect(reg.status).toBe(201);
+    const afterCreate = await readVersion();
+    expect(afterCreate).toBeGreaterThan(before);
+
+    const del = await fetch(`${server.baseUrl}/__polymock/routes?method=GET&path=/api/state-version`, { method: 'DELETE' });
+    expect(((await del.json()) as { ok: boolean }).ok).toBe(true);
+    expect(await readVersion()).toBeGreaterThan(afterCreate);
+  });
+
   it('管理 API：注册接口后立即可访问，删除后失效', async () => {
     const reg = await fetch(`${server.baseUrl}/__polymock/routes`, {
       method: 'POST',
@@ -1880,7 +1903,8 @@ describe('路径模式（POLYMOCK_MODE=path）', () => {
   it('GET /__polymock/meta 返回模式与主端口', async () => {
     const res = await fetch(`${server.baseUrl}/__polymock/meta`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, mode: 'path', mainPort: 8080 });
+    /* stateVersion 为 T2 新增契约字段（注册表 change 自增的内存态计数，未变更时为任意非负整数） */
+    expect(await res.json()).toEqual({ ok: true, mode: 'path', mainPort: 8080, stateVersion: expect.any(Number) });
   });
 
   it('路径模式创建服务免端口并自动生成唯一 basePath', async () => {

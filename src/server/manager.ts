@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import type { RouteRegistry } from '../registry.js';
 import type { Service } from '../types.js';
-import { createRouteApp, type DispatchDeps } from './app.js';
+import { createRouteApp } from './app.js';
+import type { DispatchDeps } from './dispatch.js';
 import type { WsGateway } from './ws-gateway.js';
 
 export interface ServiceManagerLike {

@@ -61,7 +61,8 @@
                   "required": [
                     "ok",
                     "mode",
-                    "mainPort"
+                    "mainPort",
+                    "stateVersion"
                   ],
                   "properties": {
                     "ok": {
@@ -81,13 +82,19 @@
                       "type": "integer",
                       "minimum": 1,
                       "maximum": 65535
+                    },
+                    "stateVersion": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "配置状态版本号：注册表 change 时自增的内存态计数（不持久化，重启归零）；与上次轮询值不同才需要重新拉取路由列表"
                     }
                   }
                 },
                 "example": {
                   "ok": true,
                   "mode": "port",
-                  "mainPort": 33233
+                  "mainPort": 33233,
+                  "stateVersion": 0
                 }
               }
             }
