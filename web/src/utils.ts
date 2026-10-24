@@ -107,6 +107,62 @@ export function formatBody(body: unknown): string {
   return JSON.stringify(body, null, 2);
 }
 
+/* ---------- 展示层截断（B1 决策：截断只允许出现在卡片预览等展示路径，编辑与提交路径始终全量） ---------- */
+
+/** 预览截断结果：text 为展示文本（截断时以 … 结尾），统计值始终基于原始文本 */
+export interface TruncatedPreview {
+  text: string;
+  /** 原始文本字符数（UTF-16 码元） */
+  totalChars: number;
+  /** 原始文本行数（按 \n 计，与 split('\n').length 同语义，空串为 1） */
+  totalLines: number;
+  truncated: boolean;
+}
+
+export interface TruncatePreviewOptions {
+  /** 字符数上限，超出截断 */
+  maxChars?: number;
+  /** 行数上限，超出时在第 maxLines 行行尾截断（≥1） */
+  maxLines?: number;
+}
+
+/** 第 n（1-based）个 \n 的下标；不存在返回 -1（indexOf 循环，避免对 MB 级文本 split 出大数组） */
+function nthNewlineIndex(text: string, n: number): number {
+  let pos = -1;
+  for (let i = 0; i < n; i += 1) {
+    pos = text.indexOf('\n', pos + 1);
+    if (pos === -1) return -1;
+  }
+  return pos;
+}
+
+/**
+ * 大文本预览截断：maxChars / maxLines 任一超限即截断（先到为准），截断文本以 … 结尾、不加其他装饰。
+ * totalChars / totalLines 始终基于原始字符串统计（indexOf 循环计 \n，不分配大数组）。
+ */
+export function truncateForPreview(text: string, options: TruncatePreviewOptions = {}): TruncatedPreview {
+  const { maxChars, maxLines } = options;
+  const totalChars = text.length;
+  let totalLines = 1;
+  let pos = text.indexOf('\n');
+  while (pos !== -1) {
+    totalLines += 1;
+    pos = text.indexOf('\n', pos + 1);
+  }
+  let limit = totalChars;
+  let truncated = false;
+  if (maxLines !== undefined && maxLines > 0 && totalLines > maxLines) {
+    limit = Math.min(limit, nthNewlineIndex(text, maxLines));
+    truncated = true;
+  }
+  if (maxChars !== undefined && totalChars > maxChars) {
+    limit = Math.min(limit, maxChars);
+    truncated = true;
+  }
+  if (!truncated) return { text, totalChars, totalLines, truncated: false };
+  return { text: `${text.slice(0, limit)}…`, totalChars, totalLines, truncated: true };
+}
+
 /** 匹配操作符的界面文案（ConditionTable / 摘要共用） */
 export const CONDITION_MATCH_LABELS: ReadonlyArray<{ value: ConditionMatch; label: string; hint: string }> = [
   { value: 'exists', label: '存在', hint: '只要求参数存在，空字符串也算存在；无需填写值' },
