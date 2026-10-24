@@ -38,24 +38,31 @@ src/
   index.ts            # 入口：装配、启动、持久化钩子
   types.ts            # 领域类型与常量
   registry.ts         # 接口注册表（纯领域逻辑，无 IO，可独立测试）
-  store.ts            # 配置读写（原子写：临时文件 + rename）
+  store.ts            # 配置读写（原子写：临时文件 + rename；解析失败保留 .corrupt- 副本）
   server/
-    app.ts            # Express 应用组装 + Mock 请求分发
-    admin.ts          # /__polymock 管理 API
+    app.ts            # Express 应用组装（createApp / createRouteApp / 静态资源 / 路径模式分发）
+    dispatch.ts       # Mock 请求分发（createDispatch / resolveRouteResponse / resolveUpgradeService）
+    route-validation.ts # 路由注册请求的纯校验层（parse* 家族，无 Express 依赖，可独立单测）
+    admin.ts          # /__polymock 管理 API 路由
     manager.ts        # 服务生命周期（启停独立端口的服务）
+    ws-gateway.ts     # WS 网关（握手 / 剧本执行 / 连接快照 / 1012 关闭）
 web/                  # Web UI 前端源码（Vue 3 SFC + Vite，依赖装在根 package.json）
   index.html          # Vite 入口（挂载点 <div id="app">）
   vite.config.ts      # 构建产物输出 ../public；dev 代理 /__polymock -> 主端口（resolveMainPort，跟随配置文件）
   tsconfig.json       # 前端类型检查（vue-tsc -p web/tsconfig.json）
   src/
     main.ts           # createApp(App).mount('#app')，引入全局样式
-    App.vue           # 整体骨架：sidebar + 视图切换 + toast + 轮询
+    App.vue           # 整体骨架：sidebar + 视图切换 + toast + 轮询（meta stateVersion 未变则跳过路由重拉）
     api.ts            # fetch 封装（/__polymock 管理 API）
-    types.ts          # 前端类型（镜像后端字段）
-    utils.ts          # method 色板 / body 格式化等共享工具
+    types.ts          # 前端类型（镜像后端字段；types-parity.test.ts 机器护栏）
+    utils.ts          # method 色板 / body 格式化 / truncateForPreview 展示截断等共享工具
+    route-form-draft.ts # 接口表单的草稿模型与纯函数层（分支草稿 / 编辑回填 backfillDraft / 提交组装 buildRoutePayload）
+    composables/      # useCopyMenu（卡片复制菜单开合行为）
     styles/global.css # 全局样式（沿用原控制台视觉）
-    components/       # ServicePanel / RouteCard / RouteForm / EmbedTest
+    components/       # ServicePanel / RouteCard / WsRouteCard / RouteForm / EmbedTest
+    components/route-form/ # RouteForm 抽屉的五段拆分（Basics / Admission / Branches / Advanced / PreviewSection + section-card.css）
 public/               # ⚠️ 纯构建产物（vite build 输出，不入库）；Express 托管该目录
+docs/                 # ui-guide.md（控制台详细指南）与 adr/（决策记录）
 测试与被测文件同目录（*.test.ts），共享工具在 test-utils.ts
 ```
 
