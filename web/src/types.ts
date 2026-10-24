@@ -17,11 +17,15 @@ export interface MockMeta {
 export interface Route {
   id: string;
   serviceId: string;
-  protocol: 'http';
+  /** 协议：http = HTTP Mock（缺省）；ws = WebSocket Mock（method 固定 'WS'） */
+  protocol: 'http' | 'ws';
   method: string;
   path: string;
   name?: string;
-  response: RouteResponse;
+  /** HTTP Mock 响应；WS 路由不使用（行为配置在 ws 字段） */
+  response?: RouteResponse;
+  /** WS 专属行为配置；HTTP 路由不使用 */
+  ws?: WsBehavior;
   /** 默认响应的前置条件；仅 requireMatch 为 true 时作为接口准入门槛参与校验 */
   request?: RouteRequest;
   /** 开启后：所有请求必须满足 request 条件才能访问该接口（优先于变体），否则按 gateStatus 返回 */
@@ -130,6 +134,39 @@ export interface ResponseVariant {
   response: RouteResponse;
 }
 
+/** WS 连接后推送的单条消息（后端 WsMessage 镜像）：字符串原样发送（支持模板），其余 JSON 序列化后发送 */
+export interface WsMessage {
+  /** 相对上一条（首条相对连接建立）的延迟毫秒，0-60000，缺省 0 */
+  delayMs?: number;
+  body: unknown;
+}
+
+/** WS 回包策略（后端 WsOnMessage 镜像） */
+export interface WsOnMessage {
+  mode: 'echo' | 'fixed' | 'sequence' | 'none';
+  replies?: unknown[];
+}
+
+/** WS 路由专属行为配置（后端 WsBehavior 镜像） */
+export interface WsBehavior {
+  onOpen?: WsMessage[];
+  loopOnOpen?: boolean;
+  onMessage?: WsOnMessage;
+  interval?: { everyMs: number; body: unknown };
+}
+
+/** GET /__polymock/ws/connections 返回的单条连接快照（只读，不含帧内容） */
+export interface WsConnectionSnapshot {
+  id: string;
+  serviceId: string;
+  routeId: string;
+  path: string;
+  remoteAddress: string;
+  connectedAt: number;
+  framesIn: number;
+  framesOut: number;
+}
+
 /** GET /__polymock/services 返回的服务分组（含管理 API 派生字段） */
 export interface ServiceInfo {
   id: string;
@@ -173,6 +210,19 @@ export interface RoutePayload {
   auth?: RouteAuth | null;
 }
 
+/** WS 接口行为配置的提交形态（内容为原始文本，由表单做 JSON 解析） */
+export interface WsRoutePayload {
+  protocol: 'ws';
+  serviceId: string;
+  name: string;
+  path: string;
+  /** 编辑态传 null 清除；新建态仅在开启时携带 */
+  auth?: RouteAuth | null;
+  disabled?: boolean;
+  /** 编辑态传 null 清除行为配置 */
+  ws?: WsBehavior | null;
+}
+
 /** 请求日志条目（运行时态，不持久化）；matched 为 null 表示未命中（404 或代理穿透） */
 export interface RequestLogEntry {
   id: string;
@@ -196,6 +246,8 @@ export interface RequestLogEntry {
   proxyBody?: string;
   /** 代理响应 Content-Type，「保存为接口」据此判定 JSON/文本模式 */
   proxyContentType?: string;
+  /** WS 连接级信息（method = 'WS' 的日志条目携带）；帧级不持久化 */
+  ws?: { connectionId: string; framesIn: number; framesOut: number; closeCode?: number };
 }
 
 /** 全局设置（持久化到 polymock.config.json） */
@@ -216,4 +268,4 @@ export interface CrudCollectionStore {
   records: Array<Record<string, unknown>>;
 }
 
-export type ViewName = 'routes' | 'embed' | 'logs';
+export type ViewName = 'routes' | 'ws-debug' | 'embed' | 'logs';

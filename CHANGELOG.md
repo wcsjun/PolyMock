@@ -2,6 +2,26 @@
 
 本项目所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### Added
+
+- **WebSocket 接口 Mock（protocol = "ws"）**：协议原生的 WS 模拟能力（依赖新增 `ws`）——
+  - 注册：管理 API 传 `protocol: "ws"`（method 自动为 `WS`），行为配置收进 `ws` 子对象（`onOpen` 有序推送 + `loopOnOpen` 循环、`onMessage` 回包策略 `echo` / `fixed` / `sequence` / `none`、`interval` 定时推送 100-60000ms）；HTTP 专属字段（`response` / `request` / `variants` / `delayMs` 等）对 WS 路由拒收 400；`WS /ws/orders` 与 `GET /ws/orders` 可共存
+  - 握手语义：命中且启用 101；未注册 / 已停用 404、认证失败 401（复用 `auth` Bearer / APIKey，凭证取自握手头），均直接拒绝、不进入 HTTP 分发与代理；HTTP 请求打到 WS 路径同样返回明确 404 且不走代理（同路径 HTTP 接口可另行注册共存）
+  - 消息模板：字符串消息原样发送并渲染 `query` / `header` / `params` / `$` 系列占位符（无 `body` 上下文），其余值 JSON 序列化后深度渲染
+  - 变更生效：编辑 / 停用 / 删除 WS 接口后存量连接以 close 1012 关闭（客户端重连取新剧本）；删除服务时连接立即销毁，`stop()` 带超时兜底不挂起
+  - 日志与快照：只写连接级日志（`method: "WS"`，close 时记录 `ws.connectionId` / 收发帧计数 / `closeCode`），帧级不持久化；新增只读接口 `GET /__polymock/ws/connections`
+- **Web 控制台 WS 支持**：视图由三个变为四个（接口管理 / **WS 调试台** / 嵌入测试 / 请求日志）——
+  - WS 卡片（v2 克制版）：与 HTTP 卡片同处一个服务分组，紫色 WS 徽章 + 一行等宽剧本摘要 + chip 白名单（认证 / 已停用 / ● N 个连接，连接数仅 > 0 时渲染且点击跳调试台），剧本详情 `<details>` 默认折叠
+  - WS 编辑抽屉五区块：基本（服务 / 名称 / 路径 / 地址预览）、握手与准入（认证方式 + 令牌）、① onOpen（延迟 + 内容列表 + 循环开关）、② onMessage（回包策略 + 回包内容）、③ interval（开关 + 间隔 + 内容），底部停用开关与 1012 重连提示；令牌只在抽屉配置与显示
+  - WS 调试台：连接条（接口下拉 + 可编辑地址 + 连接/断开）、实时连接列表（2 秒轮询快照）、发送消息（JSON 自动校验 + 快捷示例）、帧时间线（↑ 出 / ↓ 入 / ⇄ 系统，只保存在前端页面）
+  - 侧边栏显示 WS 连接数；卡片 ⇄ 按钮与连接数 chip 一键跳转调试台并选中接口
+
+### Changed
+
+- **HTTP 与 WS 卡片统一折叠规则**：内容区（HTTP 响应体 / WS 剧本步骤与使用说明）默认折叠（`<details>` 原生实现），折叠行带单行截断预览（HTTP）或步骤摘要（WS）；标题、徽章、路径、摘要行与状态 chip 始终显示，列表默认等高、可扫读
+
 ## [0.2.0] - 2026-10-22
 
 ### Added

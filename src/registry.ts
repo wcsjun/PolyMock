@@ -7,6 +7,7 @@ import type {
   RouteRequest,
   RouteResponse,
   Service,
+  WsBehavior,
 } from './types.js';
 import { BASE_PATH_PATTERN, DEFAULT_SERVICE_ID, RESERVED_BASE_PATHS, SCHEMA_VERSION, slugifyBasePath } from './types.js';
 
@@ -185,6 +186,33 @@ export class RouteRegistry extends EventEmitter {
     return route;
   }
 
+  /**
+   * 新增 WS 路由：method 固定 'WS'（注册表键的一部分，因此 WS /ws/orders 与 GET /ws/orders 可共存）。
+   * 不携带 HTTP 响应字段，行为配置收在 ws 子对象。
+   */
+  addWs(
+    serviceId: string,
+    path: string,
+    name?: string,
+    ws?: WsBehavior,
+    behavior?: Pick<Route, 'disabled' | 'auth'>,
+  ): Route {
+    const route: Route = {
+      id: randomUUID(),
+      serviceId,
+      protocol: 'ws',
+      method: 'WS',
+      path,
+      name,
+      createdAt: Date.now(),
+      ws,
+      ...behavior,
+    };
+    this.routes.set(RouteRegistry.key(serviceId, 'WS', path), route);
+    this.emit('change');
+    return route;
+  }
+
   remove(serviceId: string, method: string, path: string): boolean {
     const removed = this.routes.delete(RouteRegistry.key(serviceId, method, path));
     if (removed) this.emit('change');
@@ -212,6 +240,7 @@ export class RouteRegistry extends EventEmitter {
         | 'sequence'
         | 'crud'
         | 'auth'
+        | 'ws'
       >
     >,
   ): { ok: true; route: Route } | { ok: false; error: 'not-found' } | { ok: false; error: 'conflict'; conflict: Route } {
@@ -235,6 +264,11 @@ export class RouteRegistry extends EventEmitter {
     this.routes.set(RouteRegistry.key(next.serviceId, next.method, next.path), next);
     this.emit('change');
     return { ok: true, route: next };
+  }
+
+  /** 按 id 查找路由（不过滤禁用；管理端 PUT 需先读当前协议再做分支校验） */
+  findById(id: string): Route | undefined {
+    return [...this.routes.values()].find((r) => r.id === id);
   }
 
   /** 精确查找（跳过已禁用的路由，禁用视为未注册） */

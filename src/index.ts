@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { createApp } from './server/app.js';
+import { createServer } from 'node:http';
+import { createApp, resolveUpgradeService } from './server/app.js';
 import { ServiceManager } from './server/manager.js';
 import { RequestLogStore } from './server/request-log.js';
+import { WsGateway } from './server/ws-gateway.js';
 import { RouteRegistry } from './registry.js';
 import { resolveConfigFile, validateConfigFile } from './args.js';
 import { loadState, saveState } from './store.js';
@@ -59,14 +61,16 @@ if (!helloRoute) {
 }
 
 const logs = new RequestLogStore();
+/* WS 网关：主端口与各独立端口服务共享同一实例（连接快照统一从管理 API 暴露） */
+const gateway = new WsGateway(registry, { logs });
 /* 有状态 CRUD 共享存储与 id 计数：主应用（默认服务 / 路径模式）与各独立端口服务共用同一份，
    键为 serviceId + 集合路径，跨服务相互隔离；管理端 GET/DELETE /__polymock/crud 读取与清空 */
 const crudStores = new Map<string, Map<string, Record<string, unknown>>>();
 const crudCounters = new Map<string, number>();
-const manager = new ServiceManager(registry, { logs, crudStores, crudCounters }, { singlePort: mode === 'path' });
+const manager = new ServiceManager(registry, { logs, crudStores, crudCounters }, { singlePort: mode === 'path', gateway });
 void manager.startAll(registry.listServices().filter((s) => s.id !== DEFAULT_SERVICE_ID));
 
-const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts, mode, crudStores, crudCounters });
+const app = createApp(registry, manager, { mainPort: port, logs, adminToken, proxyAllowHosts, mode, crudStores, crudCounters, gateway });
 
 /* 回环地址集合：host 为这些值时管理 API 不暴露给外部网络 */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -83,8 +87,12 @@ const onListening = () => {
   }
 };
 
+/* 显式 createServer 后挂 WS 网关接管 upgrade（app.listen 会藏起 http.Server），再监听主端口 */
+const server = createServer(app);
+gateway.attach(server, (req) => resolveUpgradeService(registry, req.url ?? '/', mode));
+
 if (host) {
-  app.listen(port, host, onListening);
+  server.listen(port, host, onListening);
 } else {
-  app.listen(port, onListening);
+  server.listen(port, onListening);
 }

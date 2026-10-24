@@ -875,11 +875,11 @@ watch(
       gateOn.value = route.requireMatch === true;
       gateStatus.value = route.gateStatus ?? 400;
 
-      /* 默认响应（条件已归入准入区，不再重复展示） */
+      /* 默认响应（条件已归入准入区，不再重复展示）；WS 路由不走本表单，response 缺省时按空响应回填 */
       const def = defaultScene();
-      def.status = route.response.status;
-      def.headerRows = (route.response.headers ?? []).map((h) => ({ ...h }));
-      def.bodyText = formatBody(route.response.body);
+      def.status = route.response?.status ?? 200;
+      def.headerRows = (route.response?.headers ?? []).map((h) => ({ ...h }));
+      def.bodyText = formatBody(route.response?.body ?? null);
 
       const variants = (route.variants ?? []).map((v) => {
         const scene = newScene(v.name);

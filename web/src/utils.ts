@@ -17,7 +17,55 @@ export const METHOD_COLORS: Record<string, string> = {
   PUT: '#b7791f',
   PATCH: '#8250df',
   DELETE: '#cf222e',
+  WS: '#8250df',
 };
+
+/** WS 回包策略的摘要文案 */
+const WS_ONMESSAGE_SUMMARY: Record<string, string> = {
+  echo: '收到回显',
+  fixed: '固定回包',
+  sequence: '按序回包',
+  none: '收到不回包',
+};
+
+/** 定时间隔的摘要文案：满 1s 以秒计，否则以毫秒计 */
+function wsIntervalLabel(everyMs: number): string {
+  return everyMs >= 1000 ? `每 ${Math.round(everyMs / 1000)}s 定时` : `每 ${everyMs}ms 定时`;
+}
+
+/**
+ * WS 卡片的一行等宽摘要（v2 克制版：剧本配置不再一个配置一个 chip），
+ * 如「onOpen 3 步 · 收到回显 · 每 5s 定时」「仅定时 10s · 收到不回包」。
+ */
+export function wsSummary(route: Pick<Route, 'ws'>): string {
+  const onOpen = route.ws?.onOpen ?? [];
+  const mode = route.ws?.onMessage?.mode;
+  const replyPart = WS_ONMESSAGE_SUMMARY[mode ?? 'none'] ?? '收到不回包';
+  const intervalPart = route.ws?.interval
+    ? `${onOpen.length > 0 ? '' : '仅'}${wsIntervalLabel(route.ws.interval.everyMs)}`
+    : null;
+  const parts: string[] = [];
+  if (onOpen.length > 0) {
+    /* 有开场推送：onOpen · 回包 · 定时 */
+    parts.push(`onOpen ${onOpen.length} 步${route.ws?.loopOnOpen ? '循环' : ''}`, replyPart);
+    if (intervalPart) parts.push(intervalPart);
+  } else {
+    /* 无开场推送：定时（仅…） · 回包 */
+    if (intervalPart) parts.push(intervalPart);
+    parts.push(replyPart);
+  }
+  return parts.join(' · ');
+}
+
+/** WS 连接地址：与 Mock 地址同主机，协议为 ws:// */
+export function wsUrl(port: number, path: string): string {
+  return `ws://${location.hostname}:${port}${path}`;
+}
+
+/** WS 连接代码片段（卡片复制菜单用） */
+export function buildWsSnippet(url: string): string {
+  return `const ws = new WebSocket('${url}');\nws.onmessage = (e) => console.log(JSON.parse(e.data));`;
+}
 
 export function methodColor(method: string): string {
   return METHOD_COLORS[method] || '#5b6b7c';

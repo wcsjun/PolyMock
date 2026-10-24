@@ -25,7 +25,7 @@ describe('RouteRegistry', () => {
     registry.add(SVC, 'GET', '/api/hello', baseResponse);
     registry.add(SVC, 'GET', '/api/hello', { status: 500, body: null });
     expect(registry.list()).toHaveLength(1);
-    expect(registry.find(SVC, 'GET', '/api/hello')?.response.status).toBe(500);
+    expect(registry.find(SVC, 'GET', '/api/hello')?.response?.status).toBe(500);
   });
 
   it('删除接口', () => {
@@ -50,8 +50,8 @@ describe('RouteRegistry', () => {
     registry.add('user', 'GET', '/api/order', baseResponse);
     registry.add('order', 'GET', '/api/order', { status: 500, body: null });
     expect(registry.list()).toHaveLength(2);
-    expect(registry.find('user', 'GET', '/api/order')?.response.status).toBe(200);
-    expect(registry.find('order', 'GET', '/api/order')?.response.status).toBe(500);
+    expect(registry.find('user', 'GET', '/api/order')?.response?.status).toBe(200);
+    expect(registry.find('order', 'GET', '/api/order')?.response?.status).toBe(500);
   });
 
   it('list 可按服务过滤', () => {
@@ -81,8 +81,8 @@ describe('RouteRegistry', () => {
     const restored = new RouteRegistry(registry.toJSON());
     expect(restored.listServices()).toHaveLength(1);
     expect(restored.list()).toHaveLength(2);
-    expect(restored.find('user', 'GET', '/api/x')?.response.body).toEqual({ ok: true });
-    expect(restored.find(SVC, 'GET', '/api/y')?.response.status).toBe(201);
+    expect(restored.find('user', 'GET', '/api/x')?.response?.body).toEqual({ ok: true });
+    expect(restored.find(SVC, 'GET', '/api/y')?.response?.status).toBe(201);
   });
 
   it('更新响应内容与 path', () => {
@@ -91,7 +91,7 @@ describe('RouteRegistry', () => {
     const result = registry.update(route.id, { path: '/api/bye', response: { status: 500, body: 'err' } });
     expect(result.ok && result.route.path).toBe('/api/bye');
     expect(registry.find(SVC, 'GET', '/api/hello')).toBeUndefined();
-    expect(registry.find(SVC, 'GET', '/api/bye')?.response.status).toBe(500);
+    expect(registry.find(SVC, 'GET', '/api/bye')?.response?.status).toBe(500);
     expect(registry.list()).toHaveLength(1);
   });
 

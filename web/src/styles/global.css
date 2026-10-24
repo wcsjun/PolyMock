@@ -472,6 +472,8 @@ body {
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
+  /* 复制弹出菜单的定位上下文：保证菜单覆盖在卡片内容之上（RouteCard / WsRouteCard 共用） */
+  position: relative;
 }
 
 .route-title {
@@ -522,6 +524,14 @@ body {
 }
 
 .route-copy { margin-left: auto; }
+
+/* 复制按钮 + 弹出菜单的定位锚点（菜单绝对定位于按钮下方右对齐）；HTTP 与 WS 卡片共用 */
+.route-copy-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+}
 
 .route-copy:hover,
 .route-test:hover,
@@ -584,6 +594,21 @@ body {
 }
 
 .route-status.bad { color: var(--danger); border-color: rgba(207, 34, 46, 0.35); }
+
+/* 状态 chip 基础样式与「需匹配 / 认证」警示变体（RouteCard / WsRouteCard 共用，原为 RouteCard scoped） */
+.route-chip {
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+
+.route-chip.guard {
+  color: var(--warn);
+  border-color: rgba(183, 121, 31, 0.4);
+  background: rgba(183, 121, 31, 0.08);
+}
 
 .route-body {
   margin-top: 8px;
@@ -1312,4 +1337,149 @@ body.drawer-resizing iframe { pointer-events: none; }
 /* 非法 JSON 标红（与全局 textarea.invalid 语义一致，单独声明便于序列编辑器样式自治） */
 textarea.sequence-editor.invalid {
   border-color: var(--danger);
+}
+
+/* ---------- WebSocket 支持（WS 主色 #8250df，沿用 PATCH 紫） ---------- */
+:root {
+  --ws: #8250df;
+}
+
+.count-badge.ws {
+  background: rgba(130, 80, 223, 0.12);
+  border-color: rgba(130, 80, 223, 0.3);
+  color: var(--ws);
+}
+
+/* WS 卡片的一行等宽摘要：剧本配置降级为一行文字，不再一个配置一个 chip */
+.ws-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 活跃连接 chip：仅 > 0 时渲染，点击跳调试台 */
+.route-meta .route-chip.live {
+  color: var(--ws);
+  border-color: rgba(130, 80, 223, 0.4);
+  background: rgba(130, 80, 223, 0.08);
+  cursor: pointer;
+  font-family: var(--sans);
+}
+
+.route-meta .route-chip.live:hover {
+  background: rgba(130, 80, 223, 0.16);
+}
+
+/* ---------- 统一折叠（HTTP 响应体与 WS 剧本详情同一套 <details> 交互） ---------- */
+.script-details {
+  margin-top: 8px;
+}
+
+.script-details summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-faint);
+  list-style: none;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 0;
+}
+
+.script-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.script-details summary::before {
+  content: '▸';
+  transition: transform 0.15s;
+}
+
+.script-details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.script-details summary:hover {
+  color: var(--ws);
+}
+
+/* 折叠行的单行截断预览（HTTP 响应体用）：折叠后仍能一眼认出返回什么 */
+.script-details summary .preview {
+  margin-left: 6px;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.body-details[open] summary {
+  margin-bottom: 2px;
+}
+
+.body-details .route-body {
+  margin-top: 4px;
+}
+
+/* ---------- WS 剧本步骤与使用说明（卡片折叠详情内） ---------- */
+.step-list {
+  margin-top: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--bg-soft);
+}
+
+.step-index {
+  flex: none;
+  color: var(--text-faint);
+  font-weight: 700;
+}
+
+.step-when {
+  flex: none;
+  color: var(--ws);
+  font-family: var(--mono);
+}
+
+.step-payload {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-usage {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.7;
+  white-space: pre-line;
+  word-break: break-all;
 }

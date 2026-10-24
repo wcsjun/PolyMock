@@ -20,10 +20,15 @@ const emit = defineEmits<{
 }>();
 
 const cardStyle = computed(() => routeCardStyle(props.route.method, props.index));
-const bodyPreview = computed(() => formatBody(props.route.response.body));
+/* WS 卡片由 WsRouteCard 渲染，本组件只接 HTTP 路由；response 兜底只为类型完整 */
+const response = computed(() => props.route.response ?? { status: 200, body: null });
+const bodyPreview = computed(() => formatBody(response.value.body));
+/* 折叠行的单行截断预览：压平空白后交给 CSS 截断 */
+const bodyPreviewLine = computed(() => bodyPreview.value.replace(/\s+/g, ' ').trim());
+const bodyLineCount = computed(() => Math.max(1, bodyPreview.value.split('\n').length));
 const variants = computed(() => props.route.variants ?? []);
-/* 生效响应 Content-Type：自定义头 Content-Type 优先于 contentType 字段（未设置显示缺省 application/json） */
-const contentTypeLabel = computed(() => responseContentTypeLabel(props.route.response));
+/* 生效响应 Content-Type：自定义响应头 Content-Type 优先于 contentType 字段（未设置显示缺省 application/json） */
+const contentTypeLabel = computed(() => responseContentTypeLabel(props.route.response ?? {}));
 
 /* ---------- 复制菜单：地址 / curl / fetch / Java 实体 ---------- */
 
@@ -64,7 +69,7 @@ async function copySnippet(kind: CopyKind) {
   const text = kind === 'url' ? url
     : kind === 'curl' ? buildCurl(url, props.route.method)
     : kind === 'fetch' ? buildFetchSnippet(url, props.route.method)
-    : toJavaEntity(javaEntityClassName(), props.route.response.body);
+    : toJavaEntity(javaEntityClassName(), response.value.body);
   const ok = await copyText(text);
   props.notify(ok ? COPY_SUCCESS[kind] : '复制失败，请手动复制', ok ? 'ok' : 'err');
 }
@@ -153,7 +158,7 @@ function openInBrowser() {
       </button>
     </div>
     <div class="route-meta">
-      <span class="route-status" :class="{ bad: route.response.status >= 400 }">HTTP {{ route.response.status }}</span>
+      <span class="route-status" :class="{ bad: response.status >= 400 }">HTTP {{ response.status }}</span>
       <span :title="`响应 Content-Type（自定义头 Content-Type 优先于 contentType 字段）`">{{ contentTypeLabel }}</span>
       <span v-if="variants.length" class="route-chip">{{ variants.length }} 个变体</span>
       <span v-if="route.requireMatch" class="route-chip guard">需匹配</span>
@@ -187,38 +192,16 @@ function openInBrowser() {
       </div>
     </div>
 
-    <pre class="route-body">{{ bodyPreview }}</pre>
+    <!-- 统一折叠规则：内容区默认折叠，折叠行带单行截断预览（与 WS 剧本详情同一套 <details> 交互） -->
+    <details class="script-details body-details">
+      <summary>响应体（{{ bodyLineCount }} 行）<span class="preview">{{ bodyPreviewLine }}</span></summary>
+      <pre class="route-body">{{ bodyPreview }}</pre>
+    </details>
   </article>
 </template>
 
 <style scoped>
-/* 复制按钮 + 弹出菜单的定位锚点（菜单绝对定位于按钮下方右对齐） */
-.route-copy-wrap {
-  position: relative;
-  display: inline-flex;
-  flex: none;
-  margin-left: auto;
-}
-
-/* 为弹出的复制菜单提供定位上下文，保证菜单覆盖在卡片内容之上 */
-.route-row {
-  position: relative;
-}
-
-.route-chip {
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: var(--bg-soft);
-  border: 1px solid var(--line);
-  color: var(--text-dim);
-}
-
-.route-chip.guard {
-  color: var(--warn);
-  border-color: rgba(183, 121, 31, 0.4);
-  background: rgba(183, 121, 31, 0.08);
-}
-
+/* .route-copy-wrap / .route-row 定位锚点与 .route-chip 系列已提升为全局样式：与 WsRouteCard 共用 */
 .variant-list {
   margin-top: 8px;
   display: grid;

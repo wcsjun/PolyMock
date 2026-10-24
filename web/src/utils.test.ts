@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildCompanionRoutes,
   buildCurl,
+  buildWsSnippet,
   clampDrawerWidth,
   clearDrawerWidth,
   crudCollectionKey,
@@ -22,6 +23,7 @@ import {
   serviceDisplaySuffix,
   splitRouteRequest,
   toJavaEntity,
+  wsSummary,
 } from './utils';
 import type { ConditionRow, Route } from './types';
 
@@ -501,5 +503,33 @@ describe('responseContentTypeLabel 响应生效 Content-Type 标签', () => {
   it('均未设置显示缺省 application/json', () => {
     expect(responseContentTypeLabel(route())).toBe('application/json');
     expect(responseContentTypeLabel(route([], ''))).toBe('application/json');
+  });
+});
+
+/* ---------- WebSocket：wsSummary 一行摘要 / buildWsSnippet ---------- */
+
+describe('wsSummary WS 卡片一行摘要', () => {
+  it('onOpen / 回包 / 定时组合成「·」分隔的摘要', () => {
+    expect(wsSummary({ ws: { onOpen: [{ body: 1 }, { delayMs: 800, body: 2 }, { delayMs: 2000, body: 3 }], onMessage: { mode: 'echo' }, interval: { everyMs: 5000, body: 0 } } }))
+      .toBe('onOpen 3 步 · 收到回显 · 每 5s 定时');
+  });
+
+  it('无 onOpen 时定时段带「仅」前缀，未配置回包显示「收到不回包」', () => {
+    expect(wsSummary({ ws: { interval: { everyMs: 10000, body: 0 } } })).toBe('仅每 10s 定时 · 收到不回包');
+  });
+
+  it('循环播放、毫秒级间隔与各回包策略的文案', () => {
+    expect(wsSummary({ ws: { onOpen: [{ body: 1 }], loopOnOpen: true, onMessage: { mode: 'sequence' }, interval: { everyMs: 250, body: 0 } } }))
+      .toBe('onOpen 1 步循环 · 按序回包 · 每 250ms 定时');
+    expect(wsSummary({ ws: { onMessage: { mode: 'fixed' } } })).toBe('固定回包');
+    expect(wsSummary({ ws: { onMessage: { mode: 'none' } } })).toBe('收到不回包');
+  });
+});
+
+describe('buildWsSnippet WS 连接代码', () => {
+  it('生成含地址与 onmessage 的代码片段', () => {
+    expect(buildWsSnippet('ws://localhost:33233/ws/orders')).toBe(
+      `const ws = new WebSocket('ws://localhost:33233/ws/orders');\nws.onmessage = (e) => console.log(JSON.parse(e.data));`,
+    );
   });
 });
