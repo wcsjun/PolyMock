@@ -144,13 +144,21 @@ async function loadWsConnections() {
   }
 }
 
+let lastRoutesVersion = -1;
+
 async function loadAll() {
   try {
     const meta = await fetchMeta();
     mode.value = meta.mode;
     mainPort.value = meta.mainPort;
     await loadServices();
-    await loadRoutes();
+    /* stateVersion 未变则跳过路由全量拉取（大 body 配置下轮询卡顿的主因）；版本只在注册表 change 时自增，
+       显式刷新（编辑/删除/导入后的 loadAll）发生在变更之后，版本必然不同、不会被跳过。
+       版本号在 loadRoutes 成功后才记录：拉取失败时下轮轮询仍会重试 */
+    if (meta.stateVersion !== lastRoutesVersion) {
+      await loadRoutes();
+      lastRoutesVersion = meta.stateVersion;
+    }
     await loadWsConnections();
     routeCountText.value = `${routes.value.length} 个接口`;
     statusState.value = true;

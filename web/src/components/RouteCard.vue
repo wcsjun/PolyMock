@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed } from 'vue';
 import type { NotifyFn, Route } from '../types';
-import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, responseContentTypeLabel, routeCardStyle, routeUrl, toJavaEntity } from '../utils';
+import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, responseContentTypeLabel, routeCardStyle, routeUrl, toJavaEntity, truncateForPreview } from '../utils';
+import { useCopyMenu } from '../composables/useCopyMenu';
+
+/* 展示层截断阈值（B1 决策：截断只发生在卡片展示；编辑抽屉 bodyText 始终加载完整内容） */
+const PREVIEW_LINE_CHARS = 160;
+const PREVIEW_BLOCK_MAX_CHARS = 65536;
+const PREVIEW_BLOCK_MAX_LINES = 2000;
 
 const props = defineProps<{
   route: Route;
@@ -23,9 +29,16 @@ const cardStyle = computed(() => routeCardStyle(props.route.method, props.index)
 /* WS 卡片由 WsRouteCard 渲染，本组件只接 HTTP 路由；response 兜底只为类型完整 */
 const response = computed(() => props.route.response ?? { status: 200, body: null });
 const bodyPreview = computed(() => formatBody(response.value.body));
-/* 折叠行的单行截断预览：压平空白后交给 CSS 截断 */
-const bodyPreviewLine = computed(() => bodyPreview.value.replace(/\s+/g, ' ').trim());
-const bodyLineCount = computed(() => Math.max(1, bodyPreview.value.split('\n').length));
+/* 行数 / 字符数统计与 <pre> 截断共用一次计算：统计基于原始文本，DOM 只持有截断后的文本节点 */
+const bodyStats = computed(() => truncateForPreview(bodyPreview.value, { maxChars: PREVIEW_BLOCK_MAX_CHARS, maxLines: PREVIEW_BLOCK_MAX_LINES }));
+/* 折叠行的单行截断预览：压平空白后截到 160 字符（CSS ellipsis 只是视觉截断，DOM 文本节点必须封顶） */
+const bodyPreviewLine = computed(() => truncateForPreview(bodyPreview.value.replace(/\s+/g, ' ').trim(), { maxChars: PREVIEW_LINE_CHARS }).text);
+const bodyLineCount = computed(() => bodyStats.value.totalLines);
+const bodyPreviewBlock = computed(() => {
+  const stats = bodyStats.value;
+  if (!stats.truncated) return stats.text;
+  return `${stats.text}\n…（已截断，共 ${stats.totalLines} 行 / ${stats.totalChars} 字符，展开编辑可查看与修改完整内容）`;
+});
 const variants = computed(() => props.route.variants ?? []);
 /* 生效响应 Content-Type：自定义响应头 Content-Type 优先于 contentType 字段（未设置显示缺省 application/json） */
 const contentTypeLabel = computed(() => responseContentTypeLabel(props.route.response ?? {}));
@@ -42,12 +55,8 @@ const COPY_SUCCESS: Record<CopyKind, string> = {
   java: '已复制 Java 实体',
 };
 
-const copyMenuOpen = ref(false);
-const copyWrap = ref<HTMLElement | null>(null);
-
-function toggleCopyMenu() {
-  copyMenuOpen.value = !copyMenuOpen.value;
-}
+/* 复制菜单开合行为共用 useCopyMenu（与 WsRouteCard 同一份逻辑） */
+const { open: copyMenuOpen, wrapRef: copyWrap, toggle: toggleCopyMenu } = useCopyMenu();
 
 /** Java 实体类名：优先接口名，为空时取路径最后一段（toJavaEntity 内部再做 PascalCase 清理） */
 function javaEntityClassName(): string {
@@ -73,27 +82,6 @@ async function copySnippet(kind: CopyKind) {
   const ok = await copyText(text);
   props.notify(ok ? COPY_SUCCESS[kind] : '复制失败，请手动复制', ok ? 'ok' : 'err');
 }
-
-/* 点击菜单外部 / 按 Esc 时关闭；监听在 onBeforeUnmount 清理 */
-function onDocPointerDown(event: MouseEvent) {
-  if (copyMenuOpen.value && !copyWrap.value?.contains(event.target as Node)) {
-    copyMenuOpen.value = false;
-  }
-}
-
-function onDocKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') copyMenuOpen.value = false;
-}
-
-onMounted(() => {
-  document.addEventListener('pointerdown', onDocPointerDown);
-  document.addEventListener('keydown', onDocKeydown);
-});
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', onDocPointerDown);
-  document.removeEventListener('keydown', onDocKeydown);
-});
 
 /* 浏览器只能直接发起 GET，其余方法不提供此入口 */
 const canOpenInBrowser = computed(() => props.route.method === 'GET');
@@ -194,8 +182,8 @@ function openInBrowser() {
 
     <!-- 统一折叠规则：内容区默认折叠，折叠行带单行截断预览（与 WS 剧本详情同一套 <details> 交互） -->
     <details class="script-details body-details">
-      <summary>响应体（{{ bodyLineCount }} 行）<span class="preview">{{ bodyPreviewLine }}</span></summary>
-      <pre class="route-body">{{ bodyPreview }}</pre>
+      <summary>响应体（{{ bodyLineCount }} 行）<span class="preview" :title="`共 ${bodyStats.totalChars} 字符`">{{ bodyPreviewLine }}</span></summary>
+      <pre class="route-body">{{ bodyPreviewBlock }}</pre>
     </details>
   </article>
 </template>
