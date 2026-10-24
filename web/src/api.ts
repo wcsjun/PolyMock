@@ -1,4 +1,4 @@
-import type { CrudCollectionStore, MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo } from './types';
+import type { CrudCollectionStore, MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo, WsConnectionSnapshot, WsRoutePayload } from './types';
 
 /** 管理令牌（可选）：后端设置 POLYMOCK_ADMIN_TOKEN 后，所有管理请求需携带该令牌 */
 export function getAdminToken(): string {
@@ -83,6 +83,24 @@ export function createRoute(payload: RoutePayload): Promise<OkEnvelope> {
   });
 }
 
+/** 新增 WS 接口（protocol:"ws" 分支，后端独立校验） */
+export function createWsRoute(payload: WsRoutePayload): Promise<OkEnvelope> {
+  return api('/__polymock/routes', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+/** 更新 WS 接口（patch 语义；ws 传 null 清除行为配置） */
+export function updateWsRoute(id: string, payload: Partial<WsRoutePayload>): Promise<OkEnvelope> {
+  return api(`/__polymock/routes/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
 export function updateRoute(id: string, payload: RoutePayload): Promise<OkEnvelope> {
   return api(`/__polymock/routes/${encodeURIComponent(id)}`, {
     method: 'PUT',
@@ -150,8 +168,14 @@ export function updateSettings(patch: MockSettings): Promise<OkEnvelope> {
   });
 }
 
-/* ---------- 有状态 CRUD 存储（内存态） ---------- */
+/* ---------- WS 连接快照（只读） ---------- */
 
+/** GET /__polymock/ws/connections：当前全部活跃 WS 连接（调试台实时连接列表用） */
+export function fetchWsConnections(): Promise<{ ok: true; connections: WsConnectionSnapshot[] }> {
+  return api('/__polymock/ws/connections');
+}
+
+/* ---------- 有状态 CRUD 存储（内存态） ---------- */
 export function fetchCrudStores(): Promise<{ ok: true; collections: CrudCollectionStore[] }> {
   return api('/__polymock/crud');
 }

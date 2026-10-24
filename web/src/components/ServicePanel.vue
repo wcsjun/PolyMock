@@ -5,6 +5,7 @@ import type { NotifyFn, PolyMockMode, Route, ServiceInfo } from '../types';
 import { groupCrudRoutes, proxyTargetLabel, type CrudRouteGroup } from '../utils';
 import CrudDataModal from './CrudDataModal.vue';
 import RouteCard from './RouteCard.vue';
+import WsRouteCard from './WsRouteCard.vue';
 
 const props = defineProps<{
   services: ServiceInfo[];
@@ -13,6 +14,8 @@ const props = defineProps<{
   mode: PolyMockMode;
   /** 主端口：路径模式下非默认服务接口 URL 用 mainPort + basePath 拼接 */
   mainPort: number;
+  /** WS 路由 id → 活跃连接数（App 层轮询 /ws/connections 快照派生） */
+  wsConnections: Record<string, number>;
   notify: NotifyFn;
 }>();
 
@@ -22,6 +25,8 @@ const emit = defineEmits<{
   edit: [route: Route];
   'remove-route': [route: Route];
   'toggle-disable': [route: Route];
+  /** 跳转到 WS 调试台并选中该接口 */
+  'goto-debug': [route: Route];
   changed: [];
 }>();
 
@@ -39,6 +44,11 @@ function routesOf(serviceId: string): Route[] {
   return routesByService.value.get(serviceId) ?? [];
 }
 
+/** WS 接口卡片（与 HTTP 卡片同处一个服务分组，不新开顶级分组） */
+function wsRoutesOf(serviceId: string): Route[] {
+  return routesOf(serviceId).filter((route) => route.protocol === 'ws');
+}
+
 /* ---------- 有状态 CRUD：集合分组与存储查看/清空 ---------- */
 
 /** 组 key = serviceId + 集合键 */
@@ -50,9 +60,9 @@ function crudGroupsOf(serviceId: string): CrudRouteGroup[] {
   return groupCrudRoutes(routesOf(serviceId));
 }
 
-/** 非 crud 的普通接口卡片（crud 路由已在集合分组内展示） */
+/** 非 crud、非 WS 的普通接口卡片（crud 路由已在集合分组内展示，WS 路由走 WsRouteCard） */
 function plainRoutesOf(serviceId: string): Route[] {
-  return routesOf(serviceId).filter((route) => route.crud !== true);
+  return routesOf(serviceId).filter((route) => route.crud !== true && route.protocol !== 'ws');
 }
 
 /** 分组折叠状态：默认展开（保持卡片可见），可折叠只留组头 */
@@ -288,7 +298,7 @@ async function saveProxy(svc: ServiceInfo) {
           <button type="button" class="proxy-save" title="收起编辑行" @click="toggleBasePathRow(svc.id)">收起</button>
         </div>
         <div v-if="expanded.has(svc.id)" class="service-routes">
-          <p v-if="routesOf(svc.id).length === 0" class="service-empty">该服务下还没有接口，点击上方「＋ 新增接口」添加</p>
+          <p v-if="routesOf(svc.id).length === 0" class="service-empty">该服务下还没有接口，点击上方「＋ 新增接口」或「＋ 新增 WS 接口」添加</p>
 
           <!-- 有状态 CRUD：同集合（同服务同路径形状）的路由聚为一组，共享同一份内存数据 -->
           <div
@@ -352,6 +362,22 @@ async function saveProxy(svc: ServiceInfo) {
             @edit="emit('edit', $event)"
             @remove="emit('remove-route', $event)"
             @toggle-disable="emit('toggle-disable', $event)"
+          />
+
+          <!-- WS 接口卡片（同一服务、同一端口对外暴露 HTTP + WS） -->
+          <WsRouteCard
+            v-for="(route, i) in wsRoutesOf(svc.id)"
+            :key="route.id"
+            :route="route"
+            :index="i"
+            :port="mode === 'path' && !svc.isDefault ? mainPort : svc.port"
+            :base-path="mode === 'path' && !svc.isDefault ? svc.basePath : undefined"
+            :connections="wsConnections[route.id] ?? 0"
+            :notify="notify"
+            @edit="emit('edit', $event)"
+            @remove="emit('remove-route', $event)"
+            @toggle-disable="emit('toggle-disable', $event)"
+            @goto-debug="emit('goto-debug', $event)"
           />
         </div>
       </div>

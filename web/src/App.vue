@@ -7,6 +7,7 @@ import {
   fetchRoutes,
   fetchServices,
   fetchSettings,
+  fetchWsConnections,
   getAdminToken,
   setAdminToken,
   updateRouteFlags,
@@ -17,8 +18,10 @@ import OpenApiImport from './components/OpenApiImport.vue';
 import RequestLogPanel from './components/RequestLogPanel.vue';
 import RouteForm from './components/RouteForm.vue';
 import ServicePanel from './components/ServicePanel.vue';
+import WsDebugPanel from './components/WsDebugPanel.vue';
+import WsRouteForm from './components/WsRouteForm.vue';
 import { clampDrawerWidth, clearDrawerWidth, loadDrawerWidth, saveDrawerWidth } from './utils';
-import type { PolyMockMode, Route, ServiceInfo, ToastKind, ViewName } from './types';
+import type { PolyMockMode, Route, ServiceInfo, ToastKind, ViewName, WsConnectionSnapshot } from './types';
 
 const VIEW_KEY = 'polymock:view';
 const SIDEBAR_MIN = 120;
@@ -30,7 +33,7 @@ const POLL_INTERVAL = 15000;
 function readInitialView(): ViewName {
   try {
     const saved = localStorage.getItem(VIEW_KEY);
-    if (saved === 'routes' || saved === 'embed' || saved === 'logs') return saved;
+    if (saved === 'routes' || saved === 'ws-debug' || saved === 'embed' || saved === 'logs') return saved;
   } catch {
     /* 忽略 */
   }
@@ -103,6 +106,17 @@ const expanded = ref(new Set<string>());
 const statusState = ref<boolean | null>(null); // null=连接中
 const statusText = ref('连接中');
 const routeCountText = ref('0 个接口');
+/** WS 连接快照（侧边栏计数与卡片连接数 chip 共用） */
+const wsConnections = ref<WsConnectionSnapshot[]>([]);
+const wsConnectionCount = computed(() => wsConnections.value.length);
+/** WS 路由 id → 活跃连接数（0 的路由不渲染 chip） */
+const wsConnectionsByRoute = computed(() => {
+  const map: Record<string, number> = {};
+  for (const conn of wsConnections.value) {
+    map[conn.routeId] = (map[conn.routeId] ?? 0) + 1;
+  }
+  return map;
+});
 
 let autoOpenDone = false;
 
@@ -122,6 +136,14 @@ async function loadRoutes() {
   routes.value = data.routes;
 }
 
+async function loadWsConnections() {
+  try {
+    wsConnections.value = (await fetchWsConnections()).connections;
+  } catch {
+    wsConnections.value = [];
+  }
+}
+
 async function loadAll() {
   try {
     const meta = await fetchMeta();
@@ -129,6 +151,7 @@ async function loadAll() {
     mainPort.value = meta.mainPort;
     await loadServices();
     await loadRoutes();
+    await loadWsConnections();
     routeCountText.value = `${routes.value.length} 个接口`;
     statusState.value = true;
     statusText.value = `${routes.value.length} 个接口在线`;
@@ -184,7 +207,12 @@ function openCreate() {
   drawerOpen.value = true;
 }
 
+/** 按协议分流：WS 接口走 WS 编辑抽屉，HTTP 接口走原表单 */
 function editRoute(route: Route) {
+  if (route.protocol === 'ws') {
+    editWsRoute(route);
+    return;
+  }
   editingRoute.value = route;
   drawerOpen.value = true;
 }
@@ -197,6 +225,40 @@ function closeDrawer() {
 function onFormChanged() {
   void loadAll();
   closeDrawer();
+}
+
+/* ---------- WS 接口编辑抽屉 ---------- */
+
+const wsEditingRoute = ref<Route | null>(null);
+const wsDrawerOpen = ref(false);
+
+function openWsCreate() {
+  wsEditingRoute.value = null;
+  wsDrawerOpen.value = true;
+}
+
+function editWsRoute(route: Route) {
+  wsEditingRoute.value = route;
+  wsDrawerOpen.value = true;
+}
+
+function closeWsDrawer() {
+  wsDrawerOpen.value = false;
+  wsEditingRoute.value = null;
+}
+
+function onWsFormChanged() {
+  void loadAll();
+  closeWsDrawer();
+}
+
+/* ---------- WS 调试台跳转 ---------- */
+
+const wsFocusRouteId = ref<string | null>(null);
+
+function gotoWsDebug(route: Route) {
+  wsFocusRouteId.value = route.id;
+  switchView('ws-debug');
 }
 
 /* ---------- 抽屉宽度拖拽（左缘手柄，localStorage 记忆） ---------- */
@@ -263,12 +325,16 @@ function onKeydown(event: KeyboardEvent) {
     importOpen.value = false;
     return;
   }
+  if (wsDrawerOpen.value) {
+    closeWsDrawer();
+    return;
+  }
   if (drawerOpen.value) closeDrawer();
 }
 
 /* 任一抽屉打开时锁定背景滚动 */
 watch(
-  () => drawerOpen.value || importOpen.value || tokenOpen.value,
+  () => drawerOpen.value || importOpen.value || tokenOpen.value || wsDrawerOpen.value,
   (open) => {
     document.body.style.overflow = open ? 'hidden' : '';
   },
@@ -388,6 +454,16 @@ function onSidebarRzDown(event: PointerEvent) {
         </button>
         <button
           type="button"
+          class="nav-item ws"
+          :class="{ active: view === 'ws-debug' }"
+          @click="switchView('ws-debug')"
+        >
+          <span class="nav-icon">⇄</span>
+          <span>WS 调试台</span>
+          <span v-if="wsConnectionCount > 0" class="nav-badge">{{ wsConnectionCount }}</span>
+        </button>
+        <button
+          type="button"
           class="nav-item"
           :class="{ active: view === 'embed' }"
           @click="switchView('embed')"
@@ -419,8 +495,12 @@ function onSidebarRzDown(event: PointerEvent) {
           <span class="status-dot" :class="{ on: statusState === true, off: statusState === false }"></span>
           <span>{{ statusText }}</span>
         </div>
+        <div class="foot-row">
+          <span class="status-dot ws"></span>
+          <span>{{ wsConnectionCount > 0 ? `${wsConnectionCount} 个 WS 连接` : '无活跃 WS 连接' }}</span>
+        </div>
         <div class="foot-row dim">
-          <span>HTTP 协议</span>
+          <span>HTTP + WS</span>
           <span class="meta-sep">·</span>
           <span>{{ routeCountText }}</span>
         </div>
@@ -449,6 +529,9 @@ function onSidebarRzDown(event: PointerEvent) {
             <button type="button" class="import-openapi-btn" @click="importOpen = true">
               ⇩ 导入 OpenAPI
             </button>
+            <button type="button" class="add-ws-btn" @click="openWsCreate">
+              <span class="submit-plus">＋</span> 新增 WS 接口
+            </button>
             <button type="button" class="add-route-btn" @click="openCreate">
               <span class="submit-plus">＋</span> 新增接口
             </button>
@@ -460,16 +543,30 @@ function onSidebarRzDown(event: PointerEvent) {
             :expanded="expanded"
             :mode="mode"
             :main-port="mainPort"
+            :ws-connections="wsConnectionsByRoute"
             :notify="showToast"
             @toggle="toggleService"
             @remove="removeService"
             @edit="editRoute"
             @remove-route="removeRoute"
             @toggle-disable="toggleDisableRoute"
+            @goto-debug="gotoWsDebug"
             @changed="loadAll"
           />
         </div>
       </section>
+
+      <!-- WS 调试台 -->
+      <WsDebugPanel
+        :active="view === 'ws-debug'"
+        :routes="routes"
+        :services="services"
+        :mode="mode"
+        :main-port="mainPort"
+        :focus-route-id="wsFocusRouteId"
+        :notify="showToast"
+        @focus-consumed="wsFocusRouteId = null"
+      />
 
       <!-- 嵌入测试 -->
       <EmbedTest :active="view === 'embed'" :notify="showToast" />
@@ -514,6 +611,27 @@ function onSidebarRzDown(event: PointerEvent) {
         :active-variant="globalVariant"
         @changed="onFormChanged"
         @cancel-edit="closeDrawer"
+      />
+    </aside>
+  </div>
+
+  <!-- 新增/编辑 WS 接口抽屉 -->
+  <div v-show="wsDrawerOpen">
+    <div class="drawer-mask" @click="closeWsDrawer"></div>
+    <aside
+      class="drawer-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-label="WS 接口编辑表单"
+    >
+      <WsRouteForm
+        :services="services"
+        :editing="wsEditingRoute"
+        :mode="mode"
+        :main-port="mainPort"
+        :notify="showToast"
+        @changed="onWsFormChanged"
+        @cancel-edit="closeWsDrawer"
       />
     </aside>
   </div>
@@ -564,6 +682,51 @@ function onSidebarRzDown(event: PointerEvent) {
 /* 视图工具条两个按钮的间距 */
 .view-toolbar {
   gap: 10px;
+}
+
+/* WS 主色按钮：紫 #8250df，与 WS 卡片 / 调试台一致 */
+.add-ws-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border: 1px solid rgba(130, 80, 223, 0.45);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #8250df;
+  background: rgba(130, 80, 223, 0.08);
+  transition: filter 0.15s, background 0.15s;
+}
+
+.add-ws-btn:hover {
+  filter: brightness(1.05);
+  background: rgba(130, 80, 223, 0.14);
+}
+
+/* 侧边栏 WS 调试台导航项：激活态用 WS 紫 */
+.nav-item.ws.active {
+  background: rgba(130, 80, 223, 0.1);
+  border-color: rgba(130, 80, 223, 0.35);
+  color: #8250df;
+}
+
+.nav-badge {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(130, 80, 223, 0.12);
+  color: #8250df;
+}
+
+/* 侧边栏底部 WS 连接状态点：WS 紫 */
+.status-dot.ws {
+  background: #8250df;
+  box-shadow: 0 0 0 3px rgba(130, 80, 223, 0.12);
 }
 
 /* 次要按钮：视觉参考 .cancel-btn */
