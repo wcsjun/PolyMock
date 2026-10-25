@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-25
+
 ### Added
 
 - **WebSocket 接口 Mock（protocol = "ws"）**：协议原生的 WS 模拟能力（依赖新增 `ws`）——
@@ -76,3 +78,5 @@
 - **配置文件定位**：`--config <path>` 参数与 `POLYMOCK_CONFIG_FILE` 环境变量（优先级 CLI 参数 > 环境变量 > 当前目录已存在的配置 > `~/.config/polymock/` 兜底）；传入目录或路径以分隔符结尾时自动补 `polymock.config.json`，并强制 `.json` 后缀
 
 [0.1.0]: https://github.com/wcsjun/PolyMock/releases/tag/v0.1.0
+[0.2.0]: https://github.com/wcsjun/PolyMock/releases/tag/v0.2.0
+[0.3.0]: https://github.com/wcsjun/PolyMock/releases/tag/v0.3.0

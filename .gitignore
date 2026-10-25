@@ -13,3 +13,4 @@ polymock.config.json
 .workbuddy/
 e2e/.tmp-polymock.json
 test-results/
+design/
