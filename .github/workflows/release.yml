@@ -15,17 +15,17 @@ permissions:
 jobs:
   test:
     name: 质量门禁
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # 版本不写死，读取 package.json 的 packageManager 字段
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -52,16 +52,16 @@ jobs:
   publish-npm:
     name: 发布 npm
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
@@ -92,13 +92,13 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
@@ -156,7 +156,7 @@ jobs:
   docker-manifest:
     name: 合并多架构 manifest
     needs: docker
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
@@ -201,10 +201,10 @@ jobs:
   github-release:
     name: 创建 GitHub Release
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # 从 CHANGELOG.md 提取当前版本段落作为 Release 说明；未命中时回退为简短说明。
       # 用 indexOf 定位而非正则：避免正则反斜杠在 YAML/bash/JS 多层转义中的歧义
