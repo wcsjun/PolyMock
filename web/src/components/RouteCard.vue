@@ -171,14 +171,18 @@ function openInBrowser() {
       </label>
     </div>
 
-    <div v-if="variants.length" class="variant-list">
-      <div v-for="(v, i) in variants" :key="v.id" class="variant-item">
-        <span class="variant-index">#{{ i + 1 }}</span>
-        <span class="variant-label" :title="v.name">{{ v.name }}</span>
-        <span v-for="line in conditionSummary(v.match)" :key="line" class="variant-cond">{{ line }}</span>
-        <span class="variant-status" :class="{ bad: v.response.status >= 400 }">HTTP {{ v.response.status }}</span>
+    <!-- 变体列表与响应体同属内容区：与 WS 剧本详情同一套 <details> 折叠交互（折叠行不带预览，计数在 meta 行 chip 已有） -->
+    <details v-if="variants.length" class="script-details variants-details">
+      <summary>变体详情（{{ variants.length }} 个）</summary>
+      <div class="variant-list">
+        <div v-for="(v, i) in variants" :key="v.id" class="variant-item">
+          <span class="variant-index">#{{ i + 1 }}</span>
+          <span class="variant-label" :title="v.name">{{ v.name }}</span>
+          <span v-for="line in conditionSummary(v.match)" :key="line" class="variant-cond">{{ line }}</span>
+          <span class="variant-status" :class="{ bad: v.response.status >= 400 }">HTTP {{ v.response.status }}</span>
+        </div>
       </div>
-    </div>
+    </details>
 
     <!-- 统一折叠规则：内容区默认折叠，折叠行带单行截断预览（与 WS 剧本详情同一套 <details> 交互） -->
     <details class="script-details body-details">
