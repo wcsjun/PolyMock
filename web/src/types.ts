@@ -250,6 +250,19 @@ export interface RequestLogEntry {
   proxyContentType?: string;
   /** WS 连接级信息（method = 'WS' 的日志条目携带）；帧级不持久化 */
   ws?: { connectionId: string; framesIn: number; framesOut: number; closeCode?: number };
+  /** 日志方向：缺省 'in'（入站请求）；出站回调条目为 'out'（与入站共享环形缓冲与 SSE 推送） */
+  direction?: 'in' | 'out';
+  /** 出站回调专属信息（direction = 'out' 时携带）；status 为对端响应码，失败时为 0 且 error 说明原因 */
+  callback?: {
+    templateId?: string;
+    templateName?: string;
+    sourceLogId: string | null;
+    routeId: string;
+    delayMs: number;
+    firedAfterMs: number;
+    target: string;
+    requestBody?: string;
+  };
 }
 
 /** 全局设置（持久化到 polymock.config.json） */

@@ -28,6 +28,10 @@ export function loadState(filePath: string): PersistedState {
       services: Array.isArray(data?.services) ? data.services : [],
       routes: Array.isArray(data?.routes) ? data.routes : [],
     };
+    /* callbacks 缺省兜底：仅接受对象数组（元素结构由 registry / 管理端校验，此处只做形状防御） */
+    if (Array.isArray(data?.callbacks)) {
+      state.callbacks = data.callbacks.filter((item: unknown) => item !== null && typeof item === 'object');
+    }
     /* settings 缺省兜底：仅在接受对象且 activeVariant 为字符串或 null 时保留 */
     const rawSettings = data?.settings;
     if (rawSettings !== null && typeof rawSettings === 'object') {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   BodyMatchMode,
+  CallbackTemplate,
   ConditionMatch,
   ConditionType,
   RequestCondition,
@@ -8,11 +9,13 @@ import type {
   ResponseVariant,
   Route,
   RouteAuth,
+  RouteCallback,
   RouteRequest,
   WsBehavior,
   WsMessage,
   WsOnMessage,
 } from '../types.js';
+import { CALLBACK_DELAY_MAX, CALLBACK_JITTER_MAX, CALLBACK_METHODS } from '../types.js';
 
 /**
  * 路由注册请求的纯校验层（自 admin.ts 整段搬移，只搬不改）：
@@ -222,6 +225,8 @@ export function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
     body = bodyParsed.value;
     const headersParsed = parseResponseHeaders(item.response?.headers, `变体「${name.trim()}」`);
     if (!headersParsed.ok) return headersParsed;
+    const callbackParsed = parseRouteCallback(item.response?.callback, `变体「${name.trim()}」的 response.callback`);
+    if (!callbackParsed.ok) return callbackParsed;
     list.push({
       id: randomUUID(),
       name: name.trim(),
@@ -230,6 +235,7 @@ export function parseVariants(raw: unknown): ParseResult<ResponseVariant[]> {
         status: typeof item.response?.status === 'number' ? item.response.status : 200,
         contentType: typeof item.response?.contentType === 'string' ? item.response.contentType : undefined,
         ...(headersParsed.value ? { headers: headersParsed.value } : {}),
+        ...(callbackParsed.value ? { callback: callbackParsed.value } : {}),
         body,
       },
     });
@@ -330,7 +336,7 @@ const WS_ONMESSAGE_MODES: readonly WsOnMessage['mode'][] = ['echo', 'fixed', 'se
 /** WS 路由拒收的 HTTP 专属字段：避免在 WS 路由上留下不生效的「死字段」 */
 const WS_FORBIDDEN_FIELDS: readonly string[] = [
   'response', 'request', 'requireMatch', 'gateStatus', 'variants', 'sequence',
-  'crud', 'delayMs', 'jitterMs', 'failureRate', 'renderRequest',
+  'crud', 'delayMs', 'jitterMs', 'failureRate', 'renderRequest', 'callback',
 ];
 
 /** 消息体：字符串原样保留（发送时做模板渲染，JSON 文本亦按字符串发送），其余透传 */
@@ -447,4 +453,131 @@ export function parseSequence(raw: unknown): ParseResult<Array<{ status: number;
     list.push({ status: status as number, body: bodyParsed.value, ...(headersParsed.value ? { headers: headersParsed.value } : {}) });
   }
   return { ok: true, value: list };
+}
+
+/* ---------- 异步回调（route.response.callback / 回调模板）解析 ---------- */
+
+/** 解析回调 URL：必填字符串，http/https 协议（模板占位符允许出现在 path/query 位置，host 需为字面量） */
+function parseCallbackUrl(raw: unknown, label: string): ParseResult<string> {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { ok: false, error: `${label} 的 url 为必填字符串` };
+  }
+  const trimmed = raw.trim();
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, error: `${label} 的 url 需为 http(s) 地址` };
+    }
+  } catch {
+    return { ok: false, error: `${label} 的 url 需为合法的 http(s) URL` };
+  }
+  return { ok: true, value: trimmed };
+}
+
+/** 回调延迟/抖动字段范围校验（0-max 整数） */
+function parseCallbackRange(raw: unknown, label: string, field: string, max: number): ParseResult<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (!Number.isInteger(raw) || (raw as number) < 0 || (raw as number) > max) {
+    return { ok: false, error: `${label} 的 ${field} 需为 0-${max} 的整数` };
+  }
+  return { ok: true, value: raw as number };
+}
+
+/**
+ * 解析路由/变体响应上的回调配置（双模式二选一）；undefined/null 表示未配置。
+ * 引用模式仅做结构校验，模板是否存在由持有 registry 的 admin 层校验（纯函数层不做 IO）。
+ */
+export function parseRouteCallback(raw: unknown, label: string): ParseResult<RouteCallback | undefined> {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: `${label} 需为对象（引用模式 template / 内联模式 url 等）` };
+  }
+  const source = raw as Record<string, unknown>;
+
+  if (source.template !== undefined) {
+    if (typeof source.template !== 'string' || !source.template.trim()) {
+      return { ok: false, error: `${label} 的 template 需为非空字符串` };
+    }
+    if (source.bodyOverride !== undefined && typeof source.bodyOverride !== 'string') {
+      return { ok: false, error: `${label} 的 bodyOverride 需为字符串` };
+    }
+    const extra = Object.keys(source).find((key) => key !== 'template' && key !== 'bodyOverride');
+    if (extra) {
+      return { ok: false, error: `${label} 为引用模式时仅支持 template 与 bodyOverride，出现多余字段：${extra}` };
+    }
+    const ref: RouteCallback = { template: source.template.trim() };
+    if (typeof source.bodyOverride === 'string') ref.bodyOverride = source.bodyOverride;
+    return { ok: true, value: ref };
+  }
+
+  const urlParsed = parseCallbackUrl(source.url, label);
+  if (!urlParsed.ok) return urlParsed;
+  let method: string | undefined;
+  if (source.method !== undefined) {
+    if (typeof source.method !== 'string' || !CALLBACK_METHODS.includes(source.method.toUpperCase())) {
+      return { ok: false, error: `${label} 的 method 需为 ${CALLBACK_METHODS.join(' / ')}` };
+    }
+    method = source.method.toUpperCase();
+  }
+  const headersParsed = parseResponseHeaders(source.headers, label);
+  if (!headersParsed.ok) return headersParsed;
+  if (source.contentType !== undefined && (typeof source.contentType !== 'string' || !source.contentType.trim())) {
+    return { ok: false, error: `${label} 的 contentType 需为非空字符串` };
+  }
+  if (source.body !== undefined && typeof source.body !== 'string') {
+    return { ok: false, error: `${label} 的 body 需为字符串（支持模板占位符）` };
+  }
+  const delayParsed = parseCallbackRange(source.delayMs, label, 'delayMs', CALLBACK_DELAY_MAX);
+  if (!delayParsed.ok) return delayParsed;
+  const jitterParsed = parseCallbackRange(source.jitterMs, label, 'jitterMs', CALLBACK_JITTER_MAX);
+  if (!jitterParsed.ok) return jitterParsed;
+
+  const inline: Extract<RouteCallback, { url: string }> = { url: urlParsed.value };
+  if (method !== undefined) inline.method = method;
+  if (headersParsed.value) inline.headers = headersParsed.value;
+  if (typeof source.contentType === 'string') inline.contentType = source.contentType.trim();
+  if (typeof source.body === 'string') inline.body = source.body;
+  if (delayParsed.value !== undefined) inline.delayMs = delayParsed.value;
+  if (jitterParsed.value !== undefined) inline.jitterMs = jitterParsed.value;
+  return { ok: true, value: inline };
+}
+
+/** 解析回调模板的新建/更新输入（name/url 必填；headers 复用响应头规则，禁托管头） */
+export function parseCallbackTemplateInput(raw: unknown): ParseResult<Omit<CallbackTemplate, 'id' | 'createdAt'>> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: '请求体需为 JSON 对象' };
+  }
+  const source = raw as Record<string, unknown>;
+  const name = typeof source.name === 'string' ? source.name.trim() : '';
+  if (!name) return { ok: false, error: '模板名称不能为空' };
+  const urlParsed = parseCallbackUrl(source.url, '回调模板');
+  if (!urlParsed.ok) return urlParsed;
+  let method: string | undefined;
+  if (source.method !== undefined) {
+    if (typeof source.method !== 'string' || !CALLBACK_METHODS.includes(source.method.toUpperCase())) {
+      return { ok: false, error: `method 需为 ${CALLBACK_METHODS.join(' / ')}` };
+    }
+    method = source.method.toUpperCase();
+  }
+  const headersParsed = parseResponseHeaders(source.headers, '回调模板');
+  if (!headersParsed.ok) return headersParsed;
+  if (source.contentType !== undefined && (typeof source.contentType !== 'string' || !source.contentType.trim())) {
+    return { ok: false, error: 'contentType 需为非空字符串' };
+  }
+  if (source.body !== undefined && typeof source.body !== 'string') {
+    return { ok: false, error: 'body 需为字符串（模板渲染，留空表示回调无请求体）' };
+  }
+  const delayParsed = parseCallbackRange(source.delayMs, '回调模板', 'delayMs', CALLBACK_DELAY_MAX);
+  if (!delayParsed.ok) return delayParsed;
+  const jitterParsed = parseCallbackRange(source.jitterMs, '回调模板', 'jitterMs', CALLBACK_JITTER_MAX);
+  if (!jitterParsed.ok) return jitterParsed;
+
+  const result: Omit<CallbackTemplate, 'id' | 'createdAt'> = { name, url: urlParsed.value };
+  if (method !== undefined) result.method = method;
+  if (headersParsed.value) result.headers = headersParsed.value;
+  if (typeof source.contentType === 'string') result.contentType = source.contentType.trim();
+  if (typeof source.body === 'string') result.body = source.body;
+  if (delayParsed.value !== undefined) result.delayMs = delayParsed.value;
+  if (jitterParsed.value !== undefined) result.jitterMs = jitterParsed.value;
+  return { ok: true, value: result };
 }

@@ -168,6 +168,14 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 响应解析优先级：路由级认证（401）→ 请求准入（`requireMatch`，失败按 `gateStatus` 返回，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。
 
+### 异步回调（接口回调模拟）
+
+- **回调闭环**：HTTP 接口（默认响应 / 每个变体）命中并完成响应后，按配置延迟异步向目标 URL 发起一次 HTTP 回调——纯本地跑通「我调它 → 它事后调我」的第三方异步协作全链路（支付回调 / 订单状态机 / AI 长任务通知），回调目标 `127.0.0.1` 本地 handler 是主场景
+- **模板上下文快照**：回调 URL、请求头与载荷用**触发命中的原始请求**渲染（命中时快照，与响应模板同一套占位符），`{{body.orderNo}}` 可把下单参数回填进回调体；回调不阻塞响应路径（fire-and-forget），目标挂起 / 超时都不影响 Mock 响应耗时
+- **回调模板（跨服务复用）**：全局回调模板统一管理「往哪发、怎么发」的信封（URL / 方法 / 头 / 延迟 / 抖动 / 默认载荷），多个接口引用同一模板，改一处全部生效（编辑响应携带受影响分支数）；每个分支可用 `bodyOverride` 覆盖载荷表达差异（优先级：变体覆盖 > 路由继承 > 模板默认）。管理端 `/__polymock/callbacks` CRUD：`GET` 附引用位置（usage）与出站统计（stats），被引用的模板删除返回 409 并列出引用位置
+- **出站安全与防自环**：出站受 `POLYMOCK_PROXY_ALLOW` 白名单约束（缺省不校验，白名单外拒绝并记日志）；固定 10s 超时、不跟随重定向、失败只记日志不重试；出站携带 `X-PolyMock-Callback-Depth` 防自环（回调指向 PolyMock 自身时，入站深度 ≥ 5 跳过发送并记日志）
+- **出站可观测**：出站回调写入请求日志（`direction: "out"`，含渲染后载荷 / 对端状态码 / 失败原因 / 发出延迟 / 源请求关联），与入站共享环形缓冲与 SSE 实时推送；序列响应 / CRUD / WS 路由不支持回调
+
 ### 有状态 CRUD
 
 接口开启 `crud` 后按资源语义响应（内存维护，重启清空）：
@@ -194,7 +202,7 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 
 ### 调试
 
-- **请求日志**：环形缓冲 500 条，记录方法/路径/query/body 摘要/状态码/耗时，并标注命中的接口与变体（或代理穿透、失败原因）
+- **请求日志**：环形缓冲 500 条，记录方法/路径/query/body 摘要/状态码/耗时，并标注命中的接口与变体（或代理穿透、失败原因）；出站回调条目（`direction: "out"`）记录渲染后载荷 / 对端状态码 / 失败原因 / 发出延迟 / 源请求关联
 - **实时推送**：通过 SSE（`/__polymock/events`）实时推送新日志，连接不可用时自动回落 2 秒轮询
 - **过滤与重放**：按状态码（2xx/4xx/5xx）、服务、路径关键字过滤；GET 记录可一键重放，任意记录可复制 curl
 - **保存为接口**：代理穿透的响应原文可一键保存为 Mock 接口，实现「抓一次、长期 Mock」；JSON 上游格式化存储，文本上游按原 Content-Type 与原文保存
@@ -248,6 +256,10 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | GET | `/__polymock/crud` | 查看有状态 CRUD 集合存储：`{ collections: [{ serviceId, collection, count, records }] }`（内存态，重启即清） |
 | DELETE | `/__polymock/crud` | 清空 CRUD 集合存储；可选 `?serviceId=&collection=` 过滤（可单独或组合指定），返回清理的资源条数 `cleared` |
 | GET | `/__polymock/ws/connections` | WS 活跃连接快照（只读）：`{ connections: [{ id, serviceId, routeId, path, remoteAddress, connectedAt, framesIn, framesOut }] }` |
+| GET | `/__polymock/callbacks` | 回调模板列表（含引用与统计）：`{ callbacks: [{ ...模板, usage: [{ routeId, serviceId, method, path, branch }], stats: { ok, fail, lastFiredAt } }] }`（stats 由请求日志环形缓冲聚合，不额外持久化） |
+| POST | `/__polymock/callbacks` | 创建回调模板（name 全局唯一，冲突 409）：`{ name, url, method?, headers?, contentType?, body?, delayMs?, jitterMs? }` |
+| PUT | `/__polymock/callbacks/:id` | 更新回调模板，响应携带 `affected`（受影响分支数，编辑预警用） |
+| DELETE | `/__polymock/callbacks/:id` | 删除回调模板；被引用时 409 并附 `usage` 引用位置列表 |
 | GET | `/__polymock/events` | SSE 实时推送请求日志（`event: log`，data 为日志条目 JSON） |
 
 > 设置 `POLYMOCK_ADMIN_TOKEN` 后，以上接口均需携带 `x-polymock-token` 请求头或 `?token=` 查询参数，否则 401。
@@ -318,12 +330,13 @@ docker build -t polymock . && docker run -d --name polymock -p 33233:33233 -v po
 | `routes[].method` / `path` | HTTP 方法与路径（WS 路由 method 固定 `WS`），path 支持 `:param` 参数段 |
 | `routes[].protocol` | 协议：`http`（缺省）= HTTP Mock；`ws` = WebSocket Mock（行为配置在 `ws` 字段，`response` 等 HTTP 字段不落库） |
 | `routes[].ws` | WS 行为配置：`onOpen[]`（`{ delayMs?, body }` 有序推送）、`loopOnOpen`（循环播放）、`onMessage`（`{ mode: echo/fixed/sequence/none, replies? }` 回包策略）、`interval`（`{ everyMs, body }` 定时推送，100-60000ms） |
-| `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body`；body 在 JSON 模式严格校验，生效 Content-Type 为非 JSON 时为原样文本 |
+| `routes[].response` | 默认响应：`status` / `contentType?` / `headers?`（自定义响应头）/ `body`；body 在 JSON 模式严格校验，生效 Content-Type 为非 JSON 时为原样文本；可选 `callback`（异步回调，见下） |
 | `routes[].request` / `requireMatch` / `gateStatus` | 请求准入：预期请求条件、准入开关与失败状态码（`gateStatus` 缺省 `400`，可选 `404` 隐藏接口 / `422`）。条件行可选 `match` 操作符（`exists` / `equals` / `nonEmpty` / `regex`，缺省沿用历史语义）；body 可整体匹配：`bodyMatch`（`subset` 缺省 / `deepEqual` / `textEqual`）+ `bodyRaw`（`deepEqual` 为期望的完整 JSON 文本、`textEqual` 为期望原文，`subset` 下忽略） |
 | `routes[].variants[]` | 响应变体（控制台的「响应分支」）：`name` / `match?`（缺省=总是命中，条件结构与 `request` 相同）/ `response` |
 | `routes[].sequence[]` | 序列响应：`{ status, body, headers? }` 数组，循环返回 |
 | `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` / `renderRequest` | 行为开关与模拟参数（`renderRequest` = 请求体模板渲染，**缺省开启**，仅显式 `false` 关闭） |
 | `settings.activeVariant` | 全局场景集：非空时同名变体强制命中 |
+| `callbacks[]` | 全局回调模板（跨服务复用）：`{ id, name, url, method?, headers?, contentType?, body?, delayMs?, jitterMs?, createdAt }`；接口在 `response.callback` 以 `{ template: <id>, bodyOverride? }` 引用（信封由模板统一管理，仅可覆盖载荷）或内联完整配置（`{ url, method?, headers?, contentType?, body?, delayMs?, jitterMs? }`）；序列 / CRUD / WS 路由不支持。纯追加字段，旧配置无需迁移 |
 
 旧版本配置（缺失 `version` 或 `version: 1`）加载时自动迁移到当前版本，字段保持兼容，无需手动处理。请求准入相关的新增字段（条件行的 `match`、路由的 `gateStatus`、请求组的 `bodyMatch` / `bodyRaw`）全部可选，旧配置无需迁移，`version` 仍为 `2`。
 

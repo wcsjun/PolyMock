@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type {
+  CallbackTemplate,
   PersistedState,
   ResponseVariant,
   Route,
@@ -44,6 +45,7 @@ function shapesConflict(a: string, b: string): boolean {
 export class RouteRegistry extends EventEmitter {
   private readonly services = new Map<string, Service>();
   private readonly routes = new Map<string, Route>();
+  private readonly callbacks = new Map<string, CallbackTemplate>();
   private settings: { activeVariant?: string | null } = {};
 
   constructor(state?: PersistedState) {
@@ -53,6 +55,9 @@ export class RouteRegistry extends EventEmitter {
     }
     for (const route of state?.routes ?? []) {
       this.routes.set(RouteRegistry.key(route.serviceId, route.method, route.path), route);
+    }
+    for (const template of state?.callbacks ?? []) {
+      this.callbacks.set(template.id, template);
     }
     if (state?.settings) {
       this.settings = { ...state.settings };
@@ -313,6 +318,59 @@ export class RouteRegistry extends EventEmitter {
     return routes.sort((a, b) => a.createdAt - b.createdAt);
   }
 
+  // ---------- 全局回调模板 ----------
+
+  getCallbackTemplate(id: string): CallbackTemplate | undefined {
+    return this.callbacks.get(id);
+  }
+
+  getCallbackTemplateByName(name: string): CallbackTemplate | undefined {
+    return [...this.callbacks.values()].find((t) => t.name === name);
+  }
+
+  listCallbackTemplates(): CallbackTemplate[] {
+    return [...this.callbacks.values()].sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  addCallbackTemplate(template: Omit<CallbackTemplate, 'id' | 'createdAt'>, id: string = randomUUID()): CallbackTemplate {
+    const full: CallbackTemplate = { ...template, id, createdAt: Date.now() };
+    this.callbacks.set(full.id, full);
+    this.emit('change');
+    return full;
+  }
+
+  /** 更新回调模板（patch 合并）；不存在返回 undefined */
+  updateCallbackTemplate(id: string, patch: Partial<Omit<CallbackTemplate, 'id' | 'createdAt'>>): CallbackTemplate | undefined {
+    const current = this.callbacks.get(id);
+    if (!current) return undefined;
+    const next: CallbackTemplate = { ...current, ...patch, id: current.id, createdAt: current.createdAt };
+    this.callbacks.set(id, next);
+    this.emit('change');
+    return next;
+  }
+
+  removeCallbackTemplate(id: string): boolean {
+    const removed = this.callbacks.delete(id);
+    if (removed) this.emit('change');
+    return removed;
+  }
+
+  /** 回调模板被引用的位置（扫描默认响应与变体的 callback.template）；分支名默认响应为 null */
+  findCallbackUsages(templateId: string): Array<{ routeId: string; serviceId: string; method: string; path: string; branch: string | null }> {
+    const usages: Array<{ routeId: string; serviceId: string; method: string; path: string; branch: string | null }> = [];
+    for (const route of this.routes.values()) {
+      if (route.response?.callback && 'template' in route.response.callback && route.response.callback.template === templateId) {
+        usages.push({ routeId: route.id, serviceId: route.serviceId, method: route.method, path: route.path, branch: null });
+      }
+      for (const variant of route.variants ?? []) {
+        if (variant.response.callback && 'template' in variant.response.callback && variant.response.callback.template === templateId) {
+          usages.push({ routeId: route.id, serviceId: route.serviceId, method: route.method, path: route.path, branch: variant.name });
+        }
+      }
+    }
+    return usages;
+  }
+
   // ---------- 全局设置 ----------
 
   getSettings(): { activeVariant?: string | null } {
@@ -325,6 +383,12 @@ export class RouteRegistry extends EventEmitter {
   }
 
   toJSON(): PersistedState {
-    return { version: SCHEMA_VERSION, services: this.listServices(), routes: this.list(), settings: { ...this.settings } };
+    return {
+      version: SCHEMA_VERSION,
+      services: this.listServices(),
+      routes: this.list(),
+      callbacks: this.listCallbackTemplates(),
+      settings: { ...this.settings },
+    };
   }
 }
