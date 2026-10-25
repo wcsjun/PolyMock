@@ -68,6 +68,58 @@ export interface RouteResponse {
   /** 自定义响应头：在 contentType 之后应用（同名 Content-Type 覆盖 contentType 字段），值支持模板占位符 */
   headers?: ResponseHeader[];
   body: unknown;
+  /** 命中本响应后异步发出的回调配置（默认响应与每个变体各自可配）；序列 / CRUD / WS 路由不支持 */
+  callback?: RouteCallback;
+}
+
+/** 回调方法白名单（后端 CALLBACK_METHODS 镜像） */
+export const CALLBACK_METHODS: readonly string[] = ['POST', 'GET', 'PUT', 'PATCH', 'DELETE'];
+
+/**
+ * 异步回调配置（后端 RouteCallback 镜像），双模式二选一：
+ * 引用模式（template [+ bodyOverride]，信封由全局回调模板统一管理）或内联模式（url 等完整配置）
+ */
+export type RouteCallback =
+  | { template: string; bodyOverride?: string }
+  | {
+      url: string;
+      method?: string;
+      headers?: ResponseHeader[];
+      contentType?: string;
+      body?: string;
+      delayMs?: number;
+      jitterMs?: number;
+    };
+
+/** 全局回调模板（后端 CallbackTemplate 镜像；types-parity 护栏覆盖） */
+export interface CallbackTemplate {
+  id: string;
+  /** 展示名，全局唯一（冲突 409） */
+  name: string;
+  url: string;
+  method?: string;
+  headers?: ResponseHeader[];
+  contentType?: string;
+  /** 默认载荷（模板渲染；引用方可通过 bodyOverride 整体覆盖） */
+  body?: string;
+  delayMs?: number;
+  jitterMs?: number;
+  createdAt: number;
+}
+
+/** 回调模板被引用的位置（后端 findCallbackUsages 返回；branch 为 null 表示默认响应） */
+export interface CallbackUsage {
+  routeId: string;
+  serviceId: string;
+  method: string;
+  path: string;
+  branch: string | null;
+}
+
+/** 回调模板列表项：模板本体 + 引用位置 + 出站统计（由请求日志环形缓冲聚合） */
+export interface CallbackTemplateInfo extends CallbackTemplate {
+  usage: CallbackUsage[];
+  stats: { ok: number; fail: number; lastFiredAt: number | null };
 }
 
 /** 路由级认证配置（后端 RouteAuth 镜像）：模拟后端鉴权，未携带正确凭证返回 401 */
@@ -190,7 +242,7 @@ export interface RoutePayload {
   method: string;
   path: string;
   name?: string;
-  response: { status: number; headers?: ResponseHeader[]; body: string };
+  response: { status: number; headers?: ResponseHeader[]; body: string; callback?: RouteCallback };
   request?: RouteRequest;
   requireMatch?: boolean;
   /** 请求准入失败码（新建态仅在非 400 时携带；编辑态始终携带以便复位） */
@@ -198,7 +250,7 @@ export interface RoutePayload {
   variants?: Array<{
     name: string;
     match?: RouteRequest;
-    response: { status: number; headers?: ResponseHeader[]; body: string };
+    response: { status: number; headers?: ResponseHeader[]; body: string; callback?: RouteCallback };
   }>;
   disabled?: boolean;
   delayMs?: number;
@@ -283,4 +335,4 @@ export interface CrudCollectionStore {
   records: Array<Record<string, unknown>>;
 }
 
-export type ViewName = 'routes' | 'ws-debug' | 'embed' | 'logs';
+export type ViewName = 'routes' | 'callbacks' | 'ws-debug' | 'embed' | 'logs';

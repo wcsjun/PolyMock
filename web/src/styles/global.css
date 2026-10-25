@@ -610,6 +610,14 @@ body {
   background: rgba(183, 121, 31, 0.08);
 }
 
+/* 异步回调 chip（青色系，与回调管理视图同色板） */
+.route-chip.cb {
+  color: #0e7490;
+  border-color: rgba(8, 145, 178, 0.45);
+  background: rgba(8, 145, 178, 0.08);
+  font-family: var(--mono);
+}
+
 .route-body {
   margin-top: 8px;
   max-height: 120px;

@@ -1432,6 +1432,66 @@
           }
         }
       }
+    },
+    "__polymock/requests/{id}": {
+      "post": {
+        "summary": "重发出站回调（按已存渲染结果原样发送，不重新渲染模板）",
+        "description": "仅 direction=\"out\" 的日志条目支持；重发动作本身会写出站日志（firedAfterMs=0 表示手动重发）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "日志条目 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK（status 为对端响应码）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "description": "日志不存在或已淘汰",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "重发失败（连接拒绝 / 超时等），失败同样写出站日志",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2425,7 +2485,14 @@
           },
           "requestBody": {
             "type": "string",
-            "description": "渲染后请求体（截断至 2000 字符）"
+            "description": "渲染后的请求体（截断至 65536 字符；「重发此回调」按已存载荷原样发送，不重新渲染）"
+          },
+          "requestHeaders": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "实际发出的请求头（含 Content-Type 与深度头；重发按已存头原样发送）"
           }
         }
       }

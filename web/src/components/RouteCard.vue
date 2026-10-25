@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { NotifyFn, Route } from '../types';
+import type { CallbackTemplateInfo, NotifyFn, Route } from '../types';
 import { buildCurl, buildFetchSnippet, conditionSummary, copyText, formatBody, responseContentTypeLabel, routeCardStyle, routeUrl, toJavaEntity, truncateForPreview } from '../utils';
 import { useCopyMenu } from '../composables/useCopyMenu';
 
@@ -15,6 +15,8 @@ const props = defineProps<{
   port: number;
   /** 路径模式前缀：提供时 URL 为 http://host:{port}/{basePath}{path} */
   basePath?: string;
+  /** 全局回调模板列表：回调 chip 显示模板名 */
+  templates: CallbackTemplateInfo[];
   notify: NotifyFn;
 }>();
 
@@ -40,6 +42,35 @@ const bodyPreviewBlock = computed(() => {
   return `${stats.text}\n…（已截断，共 ${stats.totalLines} 行 / ${stats.totalChars} 字符，展开编辑可查看与修改完整内容）`;
 });
 const variants = computed(() => props.route.variants ?? []);
+
+/* ---------- 异步回调 chip（克制：只显示模板名或内联目标 + 延迟；详情在编辑抽屉与回调管理视图） ---------- */
+const callbackChip = computed(() => {
+  const callback = props.route.response?.callback;
+  if (!callback) return null;
+  if ('template' in callback) {
+    const tpl = props.templates.find((t) => t.id === callback.template);
+    const name = tpl?.name ?? '模板';
+    const delay = tpl?.delayMs ?? 1000;
+    return {
+      text: `回调: ${name} · ${delay >= 1000 ? `${Math.round(delay / 100) / 10}s` : `${delay}ms`}`,
+      title: `引用模板「${name}」：命中 ${delay}ms 后回调 ${tpl?.url ?? ''}（点击编辑接口查看）`,
+    };
+  }
+  const host = (() => {
+    try {
+      return new URL(callback.url).host;
+    } catch {
+      return callback.url;
+    }
+  })();
+  const delay = callback.delayMs ?? 1000;
+  return {
+    text: `回调: ${host} · ${delay >= 1000 ? `${Math.round(delay / 100) / 10}s` : `${delay}ms`}`,
+    title: `内联回调：命中 ${delay}ms 后回调 ${callback.url}（点击编辑接口查看）`,
+  };
+});
+
+const variantCallbackCount = computed(() => variants.value.filter((v) => v.response.callback).length);
 /* 生效响应 Content-Type：自定义响应头 Content-Type 优先于 contentType 字段（未设置显示缺省 application/json） */
 const contentTypeLabel = computed(() => responseContentTypeLabel(props.route.response ?? {}));
 
@@ -148,6 +179,8 @@ function openInBrowser() {
     <div class="route-meta">
       <span class="route-status" :class="{ bad: response.status >= 400 }">HTTP {{ response.status }}</span>
       <span :title="`响应 Content-Type（自定义头 Content-Type 优先于 contentType 字段）`">{{ contentTypeLabel }}</span>
+      <span v-if="callbackChip" class="route-chip cb" :title="callbackChip.title">⇄ {{ callbackChip.text }}</span>
+      <span v-if="variantCallbackCount" class="route-chip" title="配置了独立回调的变体数量（在编辑抽屉各分支查看）">变体回调 ×{{ variantCallbackCount }}</span>
       <span v-if="variants.length" class="route-chip">{{ variants.length }} 个变体</span>
       <span v-if="route.requireMatch" class="route-chip guard">需匹配</span>
       <span v-if="route.renderRequest === false" class="route-chip off" title="已关闭请求体模板渲染：请求体按客户端原文参与条件匹配">原样请求体</span>

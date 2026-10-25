@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   deleteRoute,
   deleteService,
+  fetchCallbacks,
   fetchMeta,
   fetchRoutes,
   fetchServices,
@@ -13,6 +14,7 @@ import {
   updateRouteFlags,
   updateSettings,
 } from './api';
+import CallbacksView from './components/CallbacksView.vue';
 import EmbedTest from './components/EmbedTest.vue';
 import OpenApiImport from './components/OpenApiImport.vue';
 import RequestLogPanel from './components/RequestLogPanel.vue';
@@ -21,7 +23,7 @@ import ServicePanel from './components/ServicePanel.vue';
 import WsDebugPanel from './components/WsDebugPanel.vue';
 import WsRouteForm from './components/WsRouteForm.vue';
 import { clampDrawerWidth, clearDrawerWidth, loadDrawerWidth, saveDrawerWidth } from './utils';
-import type { PolyMockMode, Route, ServiceInfo, ToastKind, ViewName, WsConnectionSnapshot } from './types';
+import type { CallbackTemplateInfo, PolyMockMode, Route, ServiceInfo, ToastKind, ViewName, WsConnectionSnapshot } from './types';
 
 const VIEW_KEY = 'polymock:view';
 const SIDEBAR_MIN = 120;
@@ -33,7 +35,7 @@ const POLL_INTERVAL = 15000;
 function readInitialView(): ViewName {
   try {
     const saved = localStorage.getItem(VIEW_KEY);
-    if (saved === 'routes' || saved === 'ws-debug' || saved === 'embed' || saved === 'logs') return saved;
+    if (saved === 'routes' || saved === 'callbacks' || saved === 'ws-debug' || saved === 'embed' || saved === 'logs') return saved;
   } catch {
     /* 忽略 */
   }
@@ -109,6 +111,20 @@ const routeCountText = ref('0 个接口');
 /** WS 连接快照（侧边栏计数与卡片连接数 chip 共用） */
 const wsConnections = ref<WsConnectionSnapshot[]>([]);
 const wsConnectionCount = computed(() => wsConnections.value.length);
+
+/* ---------- 回调模板（回调管理视图 + 编辑抽屉引用模式 + 卡片 chip） ---------- */
+
+const callbackTemplates = ref<CallbackTemplateInfo[]>([]);
+
+async function loadCallbacks() {
+  const data = await fetchCallbacks();
+  callbackTemplates.value = data.callbacks;
+}
+
+/** 回调模板变更（新建/编辑/删除）后：重拉模板与路由（usage 引用计数依赖路由列表） */
+async function onCallbacksChanged() {
+  await Promise.all([loadCallbacks(), loadRoutes()]);
+}
 /** WS 路由 id → 活跃连接数（0 的路由不渲染 chip） */
 const wsConnectionsByRoute = computed(() => {
   const map: Record<string, number> = {};
@@ -159,6 +175,7 @@ async function loadAll() {
       await loadRoutes();
       lastRoutesVersion = meta.stateVersion;
     }
+    await loadCallbacks();
     await loadWsConnections();
     routeCountText.value = `${routes.value.length} 个接口`;
     statusState.value = true;
@@ -462,6 +479,15 @@ function onSidebarRzDown(event: PointerEvent) {
         </button>
         <button
           type="button"
+          class="nav-item"
+          :class="{ active: view === 'callbacks' }"
+          @click="switchView('callbacks')"
+        >
+          <span class="nav-icon">↗</span>
+          <span>回调管理</span>
+        </button>
+        <button
+          type="button"
           class="nav-item ws"
           :class="{ active: view === 'ws-debug' }"
           @click="switchView('ws-debug')"
@@ -553,6 +579,7 @@ function onSidebarRzDown(event: PointerEvent) {
             :main-port="mainPort"
             :ws-connections="wsConnectionsByRoute"
             :notify="showToast"
+            :templates="callbackTemplates"
             @toggle="toggleService"
             @remove="removeService"
             @edit="editRoute"
@@ -561,6 +588,13 @@ function onSidebarRzDown(event: PointerEvent) {
             @goto-debug="gotoWsDebug"
             @changed="loadAll"
           />
+        </div>
+      </section>
+
+      <!-- 回调管理（出站通知中心）：模板列表 / 新建 / 编辑 / 删除保护 -->
+      <section id="view-callbacks" class="view" :hidden="view !== 'callbacks'">
+        <div class="layout">
+          <CallbacksView :active="view === 'callbacks'" :notify="showToast" :templates="callbackTemplates" @changed="onCallbacksChanged" />
         </div>
       </section>
 
@@ -617,6 +651,7 @@ function onSidebarRzDown(event: PointerEvent) {
         :mode="mode"
         :notify="showToast"
         :active-variant="globalVariant"
+        :templates="callbackTemplates"
         @changed="onFormChanged"
         @cancel-edit="closeDrawer"
       />

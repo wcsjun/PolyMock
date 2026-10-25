@@ -34,6 +34,7 @@ import {
   type Service,
   type PolyMockMode,
   type WsBehavior,
+  CALLBACK_TIMEOUT_MS,
 } from '../types.js';
 
 export interface AdminOptions {
@@ -292,6 +293,65 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   router.delete('/requests', (_req, res) => {
     options.logs?.clear();
     res.json({ ok: true });
+  });
+
+  // ---- 出站回调重发：按已存的渲染结果（目标 / 方法 / 头 / 载荷）原样重发，不重新渲染模板 ----
+  router.post('/requests/:id/resend', async (req, res) => {
+    const entry = options.logs?.list({ limit: MAX_REQUESTS_LIMIT }).find((item) => item.id === req.params.id);
+    if (!entry) {
+      res.status(404).json({ ok: false, error: '日志不存在或已淘汰' });
+      return;
+    }
+    if (entry.direction !== 'out' || !entry.callback) {
+      res.status(400).json({ ok: false, error: '仅出站回调条目支持重发' });
+      return;
+    }
+    const startedAt = Date.now();
+    const callbackInfo = entry.callback;
+    const writeResendLog = (status: number, error?: string) => {
+      options.logs?.push({
+        id: randomUUID(),
+        ts: Date.now(),
+        serviceId: entry.serviceId,
+        method: entry.method,
+        path: callbackInfo.target,
+        matched: null,
+        status,
+        direction: 'out',
+        durationMs: Date.now() - startedAt,
+        ...(error !== undefined ? { error } : {}),
+        ...(entry.bodyPreview ? { bodyPreview: entry.bodyPreview } : {}),
+        callback: {
+          ...(callbackInfo.templateId ? { templateId: callbackInfo.templateId, templateName: callbackInfo.templateName } : {}),
+          sourceLogId: callbackInfo.sourceLogId,
+          routeId: callbackInfo.routeId,
+          delayMs: 0,
+          firedAfterMs: 0,
+          target: callbackInfo.target,
+          ...(callbackInfo.requestBody !== undefined ? { requestBody: callbackInfo.requestBody } : {}),
+          ...(callbackInfo.requestHeaders ? { requestHeaders: callbackInfo.requestHeaders } : {}),
+        },
+      });
+    };
+    try {
+      const upstream = await fetch(callbackInfo.target, {
+        method: entry.method,
+        headers: callbackInfo.requestHeaders ?? {},
+        ...(entry.method !== 'GET' && entry.method !== 'HEAD' && callbackInfo.requestBody !== undefined && callbackInfo.requestBody !== ''
+          ? { body: callbackInfo.requestBody }
+          : {}),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(CALLBACK_TIMEOUT_MS),
+      });
+      void upstream.body?.cancel().catch(() => {});
+      writeResendLog(upstream.status);
+      res.json({ ok: true, status: upstream.status });
+    } catch (err) {
+      const reason = (err as Error).name === 'TimeoutError' ? `回调超时（${CALLBACK_TIMEOUT_MS / 1000}s）` : (err as Error).message;
+      const message = `重发失败：${reason}`;
+      writeResendLog(0, message);
+      res.status(502).json({ ok: false, error: message });
+    }
   });
 
   // ---- 请求日志 SSE 实时推送（event: log，data 为日志条目 JSON）----

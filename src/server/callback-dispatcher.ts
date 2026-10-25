@@ -92,6 +92,7 @@ function writeOutboundLog(
     delayMs: number;
     elapsedMs?: number;
     requestBody?: string;
+    requestHeaders?: Record<string, string>;
     templateId?: string;
     templateName?: string;
   },
@@ -116,7 +117,8 @@ function writeOutboundLog(
       delayMs: out.delayMs,
       firedAfterMs: out.firedAfterMs,
       target: out.target,
-      ...(out.requestBody !== undefined ? { requestBody: out.requestBody.slice(0, 2000) } : {}),
+      ...(out.requestBody !== undefined ? { requestBody: out.requestBody.slice(0, 65_536) } : {}),
+      ...(out.requestHeaders ? { requestHeaders: out.requestHeaders } : {}),
     },
   };
   hit.logs.push(entry);
@@ -204,6 +206,7 @@ async function fireCallback(hit: CallbackHit, resolved: ResolvedCallback): Promi
       delayMs: resolved.delayMs,
       elapsedMs: Date.now() - startedAt,
       requestBody: bodyText,
+      requestHeaders: headers,
       templateId: resolved.templateId,
       templateName: resolved.templateName,
     });
@@ -217,6 +220,7 @@ async function fireCallback(hit: CallbackHit, resolved: ResolvedCallback): Promi
       delayMs: resolved.delayMs,
       elapsedMs: Date.now() - startedAt,
       requestBody: bodyText,
+      requestHeaders: headers,
       templateId: resolved.templateId,
       templateName: resolved.templateName,
     });

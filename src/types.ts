@@ -291,7 +291,9 @@ export interface RequestLogEntry {
     firedAfterMs: number;
     /** 渲染后的完整目标 URL */
     target: string;
-    /** 渲染后的请求体预览（截断） */
+    /** 渲染后的请求体（截断至 65536 字符；「重发此回调」按已存载荷原样发送，不重新渲染） */
     requestBody?: string;
+    /** 实际发出的请求头（含 Content-Type 与深度头；重发按已存头原样发送） */
+    requestHeaders?: Record<string, string>;
   };
 }

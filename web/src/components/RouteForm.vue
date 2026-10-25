@@ -4,6 +4,7 @@ import { createRoute, updateRoute } from '../api';
 import type { PreviewRoute } from '../match-preview';
 import type {
   BodyMatchMode,
+  CallbackTemplateInfo,
   ConditionRow,
   ConditionSource,
   NotifyFn,
@@ -43,6 +44,8 @@ const props = defineProps<{
   notify: NotifyFn;
   /** 侧边栏当前全局场景集：非空时「匹配预览」按强制命中同名分支推演 */
   activeVariant?: string;
+  /** 全局回调模板列表：高级选项「异步回调」引用模式的下拉数据源 */
+  templates?: CallbackTemplateInfo[];
 }>();
 
 const emit = defineEmits<{
@@ -319,6 +322,7 @@ async function submit() {
       renderRequest: renderRequestFlag.value,
       editingRenderRequest: editing?.renderRequest,
       auth: { type: authType.value, value: authValue.value, header: authHeader.value },
+      templates: props.templates ?? [],
     });
 
     if (editing) {
@@ -590,6 +594,7 @@ function resetForm() {
         v-model:sequence-text="sequenceText"
         v-model:sequence-invalid="sequenceInvalid"
         v-model:custom-headers-on="customHeadersOn"
+        :templates="templates ?? []"
       />
 
       <PreviewSection
