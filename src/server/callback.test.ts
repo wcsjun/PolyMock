@@ -378,6 +378,45 @@ describe('异步回调（出站执行器 + 回调模板）', () => {
     expect(sent.every((e) => e.callback?.sourceLogId !== null)).toBe(true);
   });
 
+  it('重发此回调：按已存渲染结果原样重发（不重新渲染模板），并写出站日志；入站条目拒发', async () => {
+    await postRoute({
+      name: '重发用例',
+      method: 'POST',
+      path: '/api/resend',
+      response: {
+        status: 202,
+        body: { ok: true },
+        callback: { url: `${receiver.baseUrl}/resend-cb`, method: 'POST', delayMs: 20, body: '{"orderNo":"{{body.orderNo}}"}' },
+      },
+    });
+    await fetch(`${server.baseUrl}/api/resend`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ orderNo: 'C3003' }),
+    });
+    const first = await waitFor(() => receiver.calls[0]);
+    expect(JSON.parse(first.body)).toEqual({ orderNo: 'C3003' });
+    const original = await waitFor(() => outEntries().find((e) => e.status === 200));
+
+    // 重发：接收服务器应收到第二次调用，载荷与首访一致（不重新渲染）
+    const resend = await fetch(`${server.baseUrl}/__polymock/requests/${original.id}/resend`, { method: 'POST' });
+    expect(resend.status).toBe(200);
+    const resendBody = (await resend.json()) as { ok: boolean; status: number };
+    expect(resendBody).toEqual({ ok: true, status: 200 });
+    await waitFor(() => receiver.calls[1]);
+    expect(receiver.calls[1].body).toBe(first.body);
+    expect(receiver.calls[1].headers['x-polymock-callback-depth']).toBe(first.headers['x-polymock-callback-depth']);
+
+    // 重发本身写出站日志（firedAfterMs = 0 表示手动重发）
+    const resent = outEntries().find((e) => e.callback?.firedAfterMs === 0 && e.callback?.target === `${receiver.baseUrl}/resend-cb`);
+    expect(resent?.status).toBe(200);
+
+    // 入站条目不支持重发
+    const inbound = logs.list({ limit: 100 }).find((e) => e.direction !== 'out');
+    const reject = await fetch(`${server.baseUrl}/__polymock/requests/${inbound!.id}/resend`, { method: 'POST' });
+    expect(reject.status).toBe(400);
+  });
+
   it('文本模式响应分支同样触发回调；GET 回调不携带请求体与 Content-Type', async () => {
     await postRoute({
       name: '文本分支',

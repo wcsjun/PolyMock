@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { clearRequests, createRoute, fetchRequests, getAdminToken } from '../api';
+import { clearRequests, createRoute, fetchRequests, getAdminToken, resendCallbackEntry } from '../api';
 import type { NotifyFn, RequestLogEntry, ServiceInfo } from '../types';
 import { buildCurl, copyText, isJsonContentType, routeCardStyle } from '../utils';
 
@@ -142,10 +142,15 @@ function formatTime(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** 命中列文案：场景变体 / 默认响应 / 代理穿透 / 未命中 */
+/** 命中列文案：出站回调 / 场景变体 / 默认响应 / 代理穿透 / 未命中 */
 function hitText(entry: RequestLogEntry): string {
+  if (entry.direction === 'out') return entry.callback?.templateName ? `回调·${entry.callback.templateName}` : '回调（内联）';
   if (entry.matched) return entry.matched.variant ? `场景·${entry.matched.variant}` : '默认响应';
   return entry.proxied ? '代理穿透' : '未命中';
+}
+
+function isOutbound(entry: RequestLogEntry): boolean {
+  return entry.direction === 'out';
 }
 
 function queryEntries(entry: RequestLogEntry): Array<[string, string]> {
@@ -156,13 +161,33 @@ function toggleExpand(id: string) {
   expandedId.value = expandedId.value === id ? null : id;
 }
 
+/* ---------- 出站回调重发 ---------- */
+
+const resendingId = ref<string | null>(null);
+
+/** 按已存渲染结果（目标 / 方法 / 头 / 载荷）原样重发，不重新渲染模板 */
+async function resendCallback(entry: RequestLogEntry) {
+  if (resendingId.value) return;
+  resendingId.value = entry.id;
+  try {
+    const result = await resendCallbackEntry(entry.id);
+    props.notify(`已重发回调 ${entry.callback?.target ?? entry.path}：${result.status}`, result.status >= 200 && result.status < 400 ? 'ok' : 'err');
+    await refresh();
+  } catch (err) {
+    props.notify((err as Error).message, 'err');
+    await refresh();
+  } finally {
+    resendingId.value = null;
+  }
+}
+
 /* ---------- 重放 / 复制 curl ---------- */
 
 const replayingId = ref<string | null>(null);
 
-/** 仅 GET 且非代理穿透的记录可重放 */
+/** 仅 GET 且非代理穿透、非出站回调的记录可重放 */
 function canReplay(entry: RequestLogEntry): boolean {
-  return entry.method === 'GET' && !entry.proxied;
+  return entry.method === 'GET' && !entry.proxied && !isOutbound(entry);
 }
 
 /** 重放：按记录的路径与 query 重新发送 GET，提示状态码与耗时后刷新列表 */
@@ -290,18 +315,28 @@ async function saveAsRoute(entry: RequestLogEntry) {
           :title="expandedId === entry.id ? '收起详情' : '展开详情'"
           @click="toggleExpand(entry.id)"
         >
-          <span class="log-time">{{ formatTime(entry.ts) }}</span>
-          <span class="method-badge">{{ entry.method }}</span>
-          <span class="log-service" :title="entry.serviceId">{{ entry.serviceId }}</span>
-          <span class="log-path" :title="entry.path">{{ entry.path }}</span>
-          <span class="route-status" :class="{ bad: entry.status >= 400 }">{{ entry.status }}</span>
-          <span class="log-hit" :class="{ miss: !entry.matched && !entry.proxied }">{{ hitText(entry) }}</span>
-          <span class="log-dur">{{ entry.durationMs }} ms</span>
+        <span class="log-time">{{ formatTime(entry.ts) }}</span>
+        <span v-if="isOutbound(entry)" class="method-badge out" title="出站回调（PolyMock 发起）">↗ 出</span>
+        <span class="method-badge">{{ entry.method }}</span>
+        <span class="log-service" :title="entry.serviceId">{{ entry.serviceId }}</span>
+        <span class="log-path" :title="entry.path">{{ entry.path }}</span>
+        <span class="route-status" :class="{ bad: entry.status >= 400 || (isOutbound(entry) && entry.status === 0) }">{{ entry.status }}</span>
+        <span class="log-hit" :class="{ miss: !entry.matched && !entry.proxied && !isOutbound(entry) }">{{ hitText(entry) }}</span>
+        <span class="log-dur">{{ isOutbound(entry) && entry.callback?.firedAfterMs ? `命中 ${entry.callback.firedAfterMs}ms 后` : `${entry.durationMs} ms` }}</span>
         </button>
         <div v-if="expandedId === entry.id" class="log-detail">
           <div class="detail-head-row">
             <span class="detail-label">操作</span>
             <div class="detail-ops">
+              <button
+                v-if="isOutbound(entry)"
+                type="button"
+                class="mini-btn"
+                :disabled="resendingId === entry.id"
+                @click="resendCallback(entry)"
+              >
+                {{ resendingId === entry.id ? '重发中…' : '↻ 重发此回调' }}
+              </button>
               <button
                 v-if="canReplay(entry)"
                 type="button"
@@ -311,8 +346,22 @@ async function saveAsRoute(entry: RequestLogEntry) {
               >
                 {{ replayingId === entry.id ? '重放中…' : '重放' }}
               </button>
-              <button type="button" class="mini-btn" @click="copyCurl(entry)">复制 curl</button>
+              <button v-if="!isOutbound(entry)" type="button" class="mini-btn" @click="copyCurl(entry)">复制 curl</button>
             </div>
+          </div>
+          <div v-if="isOutbound(entry) && entry.callback" class="detail-block">
+            <span class="detail-label">回调信息</span>
+            <div class="detail-chips">
+              <span v-if="entry.callback.templateName" class="detail-chip">模板：{{ entry.callback.templateName }}</span>
+              <span v-else class="detail-chip">内联配置</span>
+              <span class="detail-chip">排程延迟 {{ entry.callback.delayMs }}ms</span>
+              <span class="detail-chip">命中 {{ entry.callback.firedAfterMs }}ms 后发出</span>
+              <span v-if="entry.callback.sourceLogId" class="detail-chip">源请求 {{ entry.callback.sourceLogId.slice(0, 8) }}</span>
+            </div>
+          </div>
+          <div v-if="isOutbound(entry) && entry.callback?.requestBody" class="detail-block">
+            <span class="detail-label">回调载荷（渲染后）</span>
+            <pre class="detail-pre">{{ entry.callback.requestBody }}</pre>
           </div>
           <div v-if="queryEntries(entry).length" class="detail-block">
             <span class="detail-label">Query</span>
@@ -445,6 +494,15 @@ async function saveAsRoute(entry: RequestLogEntry) {
 
 .log-row .method-badge {
   justify-self: start;
+}
+
+/* 出站回调方向徽标（青色，与回调管理视图同色板） */
+.log-row .method-badge.out {
+  color: #0e7490;
+  border-color: rgba(8, 145, 178, 0.45);
+  background: rgba(8, 145, 178, 0.08);
+  font-family: var(--mono);
+  letter-spacing: 0;
 }
 
 .log-time,

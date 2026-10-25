@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue';
 import type { SceneDraft } from '../../route-form-draft';
-import type { NotifyFn } from '../../types';
+import type { CallbackTemplateInfo, NotifyFn } from '../../types';
+import { CALLBACK_METHODS } from '../../types';
 import { methodColor, parseSequenceDraft } from '../../utils';
 
 const props = defineProps<{
-  /** 全部分支草稿（父组件持有；「自定义响应头」块就地修改当前激活场景的 headerRows） */
+  /** 全部分支草稿（父组件持有；「自定义响应头」「异步回调」块就地修改当前激活场景） */
   scenes: SceneDraft[];
   /** 当前激活场景的 localId（由 BranchesSection 维护，本组件只读） */
   activeId: number;
@@ -14,6 +15,8 @@ const props = defineProps<{
   companionRoutes: Array<{ key: string; method: string; path: string; name: string }>;
   /** 配套路由勾选状态（父组件持有；本组件就地修改） */
   companionSelection: Record<string, boolean>;
+  /** 全局回调模板列表（引用模式下拉；可在「回调管理」视图维护） */
+  templates: CallbackTemplateInfo[];
   notify: NotifyFn;
 }>();
 
@@ -53,6 +56,41 @@ const activeIndex = computed(() => {
 const activeScene = computed(() => scenes.value[activeIndex.value]);
 
 const activeBranchLabel = computed(() => (activeScene.value.localId === 0 ? '默认响应' : activeScene.value.name.trim() || '未命名分支'));
+
+/* ---------- 异步回调 ---------- */
+
+/** 序列 / CRUD 与回调互斥：开启时回调配置不提交（后端同样拒收），此处直接禁用交互并提示 */
+const callbackBlocked = computed(() => sequenceOn.value || crudFlag.value);
+
+const callbackDraft = computed(() => activeScene.value.callback);
+
+const callbackMode = computed(() => callbackDraft.value.mode);
+
+const templateOptions = computed(() =>
+  props.templates.map((t) => ({
+    id: t.id,
+    label: `${t.name} · ${t.method ?? 'POST'} ${t.url} · 延迟 ${t.delayMs ?? 1000}ms`,
+  })),
+);
+
+/** 引用模式未选模板时的兜底：首个模板 */
+function onCallbackModeChange(mode: 'template' | 'inline') {
+  callbackDraft.value.mode = mode;
+  if (mode === 'template' && !callbackDraft.value.templateId && templateOptions.value.length > 0) {
+    callbackDraft.value.templateId = templateOptions.value[0].id;
+  }
+}
+
+function addCallbackHeader() {
+  callbackDraft.value.headerRows.push({ key: '', value: '' });
+}
+
+function removeCallbackHeader(index: number) {
+  callbackDraft.value.headerRows.splice(index, 1);
+}
+
+const CALLBACK_HINT_TITLE =
+  '回调 URL / 请求头 / 载荷支持与响应模板同一套占位符（上下文为触发命中的原始请求，命中时快照）：{{query.*}} {{header.*}} {{params.*}} {{body.*}} {{$now}} 等。出站受 POLYMOCK_PROXY_ALLOW 白名单约束；10s 超时、不跟随重定向、失败只记日志不重试；出站携带深度头防自环。';
 
 /* ---------- 自定义响应头 ---------- */
 
@@ -226,6 +264,118 @@ function onSequenceInput() {
           <p v-if="!activeScene.headerRows.length" class="hint">暂无响应头，点击上方按钮添加</p>
         </div>
       </div>
+
+      <!-- ========== 异步回调（当前分支） ========== -->
+      <div class="advanced-block callback-block">
+        <label class="switch-row" for="f-callback">
+          <span class="switch-text">
+            <span class="switch-title">异步回调</span>
+            <span class="hint">当前分支「{{ activeBranchLabel }}」命中并响应后，按延迟异步发出一次 HTTP 回调（fire-and-forget，不阻塞响应）</span>
+          </span>
+          <input id="f-callback" v-model="callbackDraft.on" type="checkbox" class="switch-input">
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
+
+        <div v-if="callbackDraft.on" class="callback-config">
+          <p v-if="callbackBlocked" class="field-error">序列响应 / CRUD 与回调互斥：请先关闭上方对应开关，否则回调配置不会提交</p>
+          <fieldset class="callback-mode" :disabled="callbackBlocked">
+            <div class="callback-mode-row" role="tablist" aria-label="回调配置模式">
+              <button
+                type="button"
+                class="mode-btn"
+                :class="{ on: callbackMode === 'template' }"
+                @click="onCallbackModeChange('template')"
+              >引用模板</button>
+              <button
+                type="button"
+                class="mode-btn"
+                :class="{ on: callbackMode === 'inline' }"
+                @click="onCallbackModeChange('inline')"
+              >内联配置</button>
+            </div>
+
+            <template v-if="callbackMode === 'template'">
+              <div class="field">
+                <label for="f-cb-template">回调模板</label>
+                <select v-if="templateOptions.length" id="f-cb-template" v-model="callbackDraft.templateId">
+                  <option v-for="t in templateOptions" :key="t.id" :value="t.id">{{ t.label }}</option>
+                </select>
+                <p v-else class="hint">尚无模板：可先切换「内联配置」，或在「回调管理」视图创建模板</p>
+                <p class="hint">信封（URL / 方法 / 头 / 延迟 / 抖动）由模板统一管理，编辑模板将影响所有引用接口；此处仅可覆盖载荷</p>
+              </div>
+              <div class="field">
+                <label for="f-cb-override">载荷覆盖 bodyOverride（可选）</label>
+                <textarea
+                  id="f-cb-override"
+                  v-model="callbackDraft.bodyOverride"
+                  rows="5"
+                  class="cb-editor"
+                  placeholder='留空使用模板默认载荷，如 {"orderNo": "{{body.orderNo}}"}'
+                  spellcheck="false"
+                ></textarea>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="field">
+                <label for="f-cb-url">回调 URL</label>
+                <div class="cb-method-row">
+                  <select id="f-cb-method" v-model="callbackDraft.method" aria-label="回调方法">
+                    <option v-for="m in CALLBACK_METHODS" :key="m" :value="m">{{ m }}</option>
+                  </select>
+                  <input
+                    id="f-cb-url"
+                    v-model="callbackDraft.url"
+                    type="text"
+                    placeholder="http://127.0.0.1:8080/pay/notify"
+                    spellcheck="false"
+                  >
+                </div>
+                <p class="hint">URL 支持模板占位符（写法与响应模板相同，如把 body 里的订单号回填进回调地址）；目标受白名单约束</p>
+              </div>
+              <div class="cb-grid">
+                <div class="field">
+                  <label for="f-cb-delay">延迟 ms（0–60000）</label>
+                  <input id="f-cb-delay" v-model.number="callbackDraft.delayMs" type="number" min="0" max="60000" placeholder="缺省 1000">
+                </div>
+                <div class="field">
+                  <label for="f-cb-jitter">抖动 ms（0–30000）</label>
+                  <input id="f-cb-jitter" v-model.number="callbackDraft.jitterMs" type="number" min="0" max="30000" placeholder="缺省 0">
+                </div>
+                <div class="field">
+                  <label for="f-cb-ct">Content-Type</label>
+                  <input id="f-cb-ct" v-model="callbackDraft.contentType" type="text" placeholder="缺省 application/json" spellcheck="false">
+                </div>
+              </div>
+              <div class="field">
+                <label for="f-cb-body">回调请求体（模板渲染）</label>
+                <textarea
+                  id="f-cb-body"
+                  v-model="callbackDraft.body"
+                  rows="5"
+                  class="cb-editor"
+                  placeholder='{ "orderNo": "{{body.orderNo}}", "status": "PAID" }'
+                  spellcheck="false"
+                ></textarea>
+              </div>
+              <div class="cb-headers">
+                <div class="label-row">
+                  <label>自定义请求头</label>
+                  <button type="button" class="mini-btn" @click="addCallbackHeader">＋ 添加请求头</button>
+                </div>
+                <div v-for="(row, i) in callbackDraft.headerRows" :key="i" class="resp-header-row">
+                  <input v-model="row.key" type="text" placeholder="头名称，如 X-Signature" spellcheck="false" :aria-label="`回调请求头名称 ${i + 1}`">
+                  <input v-model="row.value" type="text" placeholder="值，如 {{$uuid}}" spellcheck="false" :aria-label="`回调请求头值 ${i + 1}`">
+                  <button type="button" class="rh-del" title="删除该请求头" :aria-label="`删除回调请求头 ${i + 1}`" @click="removeCallbackHeader(i)">×</button>
+                </div>
+                <p v-if="!callbackDraft.headerRows.length" class="hint">暂无请求头；Content-Type 由上方字段管理</p>
+              </div>
+            </template>
+
+            <p class="hint" :title="CALLBACK_HINT_TITLE">上下文为触发命中的原始请求（命中时快照）；出站受白名单约束、10s 超时、失败只记日志不重试，携带深度头防自环</p>
+          </fieldset>
+        </div>
+      </div>
     </div>
   </section>
 </template>
@@ -326,6 +476,93 @@ function onSequenceInput() {
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   padding: 10px 12px;
+}
+
+/* ---------- 异步回调 ---------- */
+.callback-block .callback-config {
+  display: grid;
+  gap: 10px;
+}
+
+.callback-mode {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(8, 145, 178, 0.3);
+  border-radius: 10px;
+  background: rgba(8, 145, 178, 0.05);
+  padding: 12px;
+  margin: 0;
+  min-width: 0;
+}
+
+.callback-mode:disabled {
+  opacity: 0.6;
+}
+
+.callback-mode-row {
+  display: inline-flex;
+  width: max-content;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mode-btn {
+  padding: 5px 14px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mode-btn + .mode-btn {
+  border-left: 1px solid var(--line-strong);
+}
+
+.mode-btn.on {
+  background: rgba(8, 145, 178, 0.12);
+  color: #0e7490;
+  font-weight: 700;
+}
+
+.cb-method-row {
+  display: flex;
+  gap: 8px;
+}
+
+.cb-method-row select {
+  flex: none;
+  width: 104px;
+  cursor: pointer;
+}
+
+.cb-method-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cb-editor {
+  min-height: 88px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.cb-headers {
+  display: grid;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .cb-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .crud-companions-title {

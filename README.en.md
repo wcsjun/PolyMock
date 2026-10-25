@@ -224,9 +224,10 @@ On top of HTTP mocking, PolyMock offers **protocol-native** WS mocking over the 
 
 ## Web Console
 
-Open <http://localhost:33233> in a browser and switch between four views in the sidebar (your choice is remembered):
+Open <http://localhost:33233> in a browser and switch between five views in the sidebar (your choice is remembered):
 
-- **Routes**: service groups and route cards (HTTP and WS in the same group, content areas collapsed by default with truncated previews; CRUD routes grouped by collection); the create/edit drawer is organised as five cards — **Basics / Request admission / Response branches / Advanced options / Match preview** — and the WS drawer as five sections (Basics / Handshake & admission / onOpen / onMessage / interval)
+- **Routes**: service groups and route cards (HTTP and WS in the same group, content areas collapsed by default with truncated previews; CRUD routes grouped by collection); the create/edit drawer is organised as five cards — **Basics / Request admission / Response branches / Advanced options / Match preview** (Advanced options include the **async callback** dual-mode zone: reference a template or inline config) — and the WS drawer as five sections (Basics / Handshake & admission / onOpen / onMessage / interval)
+- **Callbacks**: the outbound notification center for global callback templates — template list (method badge / target URL / usage count / outbound stats), create & edit drawer (edit warns about affected branches), 409 delete protection for referenced templates; outbound callbacks appear in the request log with a `↗ out` badge and a "resend callback" action
 - **WS debug**: visual debugging for WS routes — connection bar, live connection list, send box (JSON validation), frame timeline (frames stay in the current page)
 - **Embed test**: load any page into a resizable iframe to verify it against the mocks without leaving the console
 - **Request log**: log list with filters, live (SSE) / polling, replay, copy curl, clear, and "save as route" for proxied entries

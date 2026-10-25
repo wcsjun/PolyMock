@@ -8,10 +8,12 @@
  */
 import type {
   BodyMatchMode,
+  CallbackTemplateInfo,
   ConditionRow,
   ConditionSource,
   ResponseHeader,
   Route,
+  RouteCallback,
   RoutePayload,
 } from './types';
 import { buildRouteRequest, formatBody, isJsonContentType, sequenceToDraftText, splitRouteRequest } from './utils';
@@ -43,6 +45,74 @@ export interface SceneDraft {
   headerRows: ResponseHeader[];
   bodyText: string;
   invalid: boolean;
+  /** 异步回调（命中本分支并响应后发出）；on 控制是否提交 */
+  callback: CallbackDraft;
+}
+
+/** 单个分支的回调草稿：引用模板 / 内联双模式；数字空串 = 未设置 */
+export interface CallbackDraft {
+  on: boolean;
+  mode: 'template' | 'inline';
+  templateId: string;
+  bodyOverride: string;
+  url: string;
+  method: string;
+  contentType: string;
+  body: string;
+  delayMs: number | '';
+  jitterMs: number | '';
+  headerRows: ResponseHeader[];
+}
+
+export function emptyCallbackDraft(): CallbackDraft {
+  return { on: false, mode: 'template', templateId: '', bodyOverride: '', url: '', method: 'POST', contentType: '', body: '', delayMs: '', jitterMs: '', headerRows: [] };
+}
+
+/** 从已保存的回调配置回填草稿（编辑回填用） */
+export function callbackToDraft(callback: RouteCallback | undefined): CallbackDraft {
+  if (!callback) return emptyCallbackDraft();
+  if ('template' in callback) {
+    return { ...emptyCallbackDraft(), on: true, mode: 'template', templateId: callback.template, bodyOverride: callback.bodyOverride ?? '' };
+  }
+  return {
+    on: true,
+    mode: 'inline',
+    templateId: '',
+    bodyOverride: '',
+    url: callback.url,
+    method: callback.method ?? 'POST',
+    contentType: callback.contentType ?? '',
+    body: callback.body ?? '',
+    delayMs: callback.delayMs ?? '',
+    jitterMs: callback.jitterMs ?? '',
+    headerRows: (callback.headers ?? []).map((h) => ({ ...h })),
+  };
+}
+
+/** 提交形态：引用模式仅 template + bodyOverride；内联模式按字段有值裁剪；序列 / CRUD 下强制不提交（后端拒收） */
+export function buildSceneCallback(
+  scene: SceneDraft,
+  options: { sequenceActive: boolean; crud: boolean; templates: CallbackTemplateInfo[] },
+): RouteCallback | undefined {
+  const draft = scene.callback;
+  if (!draft.on) return undefined;
+  if (options.sequenceActive || options.crud) return undefined;
+  if (draft.mode === 'template') {
+    const templateId = draft.templateId || options.templates[0]?.id || '';
+    if (!templateId) return undefined;
+    return draft.bodyOverride.trim() ? { template: templateId, bodyOverride: draft.bodyOverride } : { template: templateId };
+  }
+  const url = draft.url.trim();
+  if (!url) return undefined;
+  const headers = draft.headerRows.map((row) => ({ key: row.key.trim(), value: row.value })).filter((row) => row.key);
+  const inline: Extract<RouteCallback, { url: string }> = { url };
+  if (draft.method && draft.method !== 'POST') inline.method = draft.method;
+  if (headers.length) inline.headers = headers;
+  if (draft.contentType.trim()) inline.contentType = draft.contentType.trim();
+  if (draft.body.trim()) inline.body = draft.body;
+  if (draft.delayMs !== '') inline.delayMs = draft.delayMs;
+  if (draft.jitterMs !== '') inline.jitterMs = draft.jitterMs;
+  return inline;
 }
 
 let sceneSeq = 0;
@@ -60,6 +130,7 @@ export function newScene(name: string): SceneDraft {
     headerRows: [],
     bodyText: '',
     invalid: false,
+    callback: emptyCallbackDraft(),
   };
 }
 
@@ -146,12 +217,14 @@ export function backfillDraft(route: Route): RouteFormDraft {
   def.status = route.response?.status ?? 200;
   def.headerRows = (route.response?.headers ?? []).map((h) => ({ ...h }));
   def.bodyText = formatBody(route.response?.body ?? null);
+  def.callback = callbackToDraft(route.response?.callback);
 
   const variants = (route.variants ?? []).map((v) => {
     const scene = newScene(v.name);
     scene.status = v.response.status;
     scene.headerRows = (v.response.headers ?? []).map((h) => ({ ...h }));
     scene.bodyText = formatBody(v.response.body);
+    scene.callback = callbackToDraft(v.response.callback);
     const matchSplit = splitRouteRequest(v.match);
     scene.rows = { query: matchSplit.query, headers: matchSplit.headers, body: matchSplit.body };
     scene.bodyMatch = matchSplit.bodyMatch;
@@ -222,6 +295,8 @@ export interface RouteFormSubmitInput {
   /** 编辑目标的 renderRequest 原值（新建态缺省 undefined）：恢复默认开启时需补写 true 覆盖显式 false */
   editingRenderRequest?: boolean;
   auth: { type: 'none' | 'apikey' | 'bearer'; value: string; header: string };
+  /** 全局回调模板列表（引用模式下拉与缺省模板兜底）；缺省视为空列表 */
+  templates?: CallbackTemplateInfo[];
 }
 
 export function buildRoutePayload(input: RouteFormSubmitInput): RoutePayload {
@@ -231,13 +306,23 @@ export function buildRoutePayload(input: RouteFormSubmitInput): RoutePayload {
   const gateRowsOf = (source: ConditionSource) => input.gate.rows.filter((row) => (row.source ?? 'query') === source);
   const gateRequest = buildRouteRequest(gateRowsOf('query'), gateRowsOf('headers'), gateRowsOf('body'), input.gate.bodyMatch, input.gate.bodyRaw);
 
+  /* 序列 / CRUD 与回调互斥：开启时不提交回调配置（后端同样拒收，前端先行避免 400） */
+  const sequenceActive = (input.sequence?.length ?? 0) > 0;
+  const callbackOptions = { sequenceActive, crud: input.crud, templates: input.templates ?? [] };
+  const defCallback = buildSceneCallback(def, callbackOptions);
   const defHeaders = input.customHeadersOn ? buildResponseHeaders(def) : undefined;
   const variants = variantScenes.map((scene) => {
     const sceneHeaders = input.customHeadersOn ? buildResponseHeaders(scene) : undefined;
+    const sceneCallback = buildSceneCallback(scene, callbackOptions);
     return {
       name: scene.name.trim(),
       match: buildRouteRequest(scene.rows.query, scene.rows.headers, scene.rows.body, scene.bodyMatch, scene.bodyRaw),
-      response: { status: Number(scene.status) || 200, ...(sceneHeaders ? { headers: sceneHeaders } : {}), body: scene.bodyText.trim() },
+      response: {
+        status: Number(scene.status) || 200,
+        ...(sceneHeaders ? { headers: sceneHeaders } : {}),
+        ...(sceneCallback ? { callback: sceneCallback } : {}),
+        body: scene.bodyText.trim(),
+      },
     };
   });
 
@@ -247,7 +332,12 @@ export function buildRoutePayload(input: RouteFormSubmitInput): RoutePayload {
     serviceId: input.serviceId,
     method: input.method,
     path: input.path,
-    response: { status: Number(def.status) || 200, ...(defHeaders ? { headers: defHeaders } : {}), body: def.bodyText.trim() },
+    response: {
+      status: Number(def.status) || 200,
+      ...(defHeaders ? { headers: defHeaders } : {}),
+      ...(defCallback ? { callback: defCallback } : {}),
+      body: def.bodyText.trim(),
+    },
     request: editing ? (gateRequest ?? {}) : gateRequest,
     requireMatch: input.gate.on,
     gateStatus: input.gate.status,

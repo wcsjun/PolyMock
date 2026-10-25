@@ -1,4 +1,4 @@
-import type { CrudCollectionStore, MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo, WsConnectionSnapshot, WsRoutePayload } from './types';
+import type { CallbackTemplate, CallbackTemplateInfo, CrudCollectionStore, MockMeta, MockSettings, RequestLogEntry, Route, RoutePayload, ServiceInfo, WsConnectionSnapshot, WsRoutePayload } from './types';
 
 /** 管理令牌（可选）：后端设置 POLYMOCK_ADMIN_TOKEN 后，所有管理请求需携带该令牌 */
 export function getAdminToken(): string {
@@ -187,4 +187,43 @@ export function clearCrudStore(params?: { serviceId?: string; collection?: strin
   if (params?.collection) query.set('collection', params.collection);
   const qs = query.toString();
   return api(`/__polymock/crud${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
+}
+
+/* ---------- 异步回调（回调模板 CRUD + 出站重发） ---------- */
+
+/** 回调模板的新建/更新输入（id / createdAt 由后端生成） */
+export type CallbackTemplateInput = Omit<CallbackTemplate, 'id' | 'createdAt'>;
+
+/** 回调模板列表（含引用位置 usage 与出站统计 stats） */
+export function fetchCallbacks(): Promise<{ ok: true; callbacks: CallbackTemplateInfo[] }> {
+  return api('/__polymock/callbacks');
+}
+
+export function createCallbackTemplate(input: CallbackTemplateInput): Promise<{ ok: true; template: CallbackTemplate }> {
+  return api('/__polymock/callbacks', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(input),
+  });
+}
+
+/** 更新回调模板；affected = 受影响分支数（编辑预警用） */
+export function updateCallbackTemplate(
+  id: string,
+  input: CallbackTemplateInput,
+): Promise<{ ok: true; template: CallbackTemplate; affected: number }> {
+  return api(`/__polymock/callbacks/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteCallbackTemplate(id: string): Promise<OkEnvelope> {
+  return api(`/__polymock/callbacks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 重发出站回调：按已存的渲染结果（目标/方法/头/载荷）原样发送，不重新渲染模板 */
+export function resendCallbackEntry(logId: string): Promise<{ ok: true; status: number }> {
+  return api(`/__polymock/requests/${encodeURIComponent(logId)}/resend`, { method: 'POST' });
 }

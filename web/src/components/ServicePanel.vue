@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import { createService, deleteRoute, setProxy, updateServiceBasePath } from '../api';
-import type { NotifyFn, PolyMockMode, Route, ServiceInfo } from '../types';
+import type { CallbackTemplateInfo, NotifyFn, PolyMockMode, Route, ServiceInfo } from '../types';
 import { groupCrudRoutes, proxyTargetLabel, type CrudRouteGroup } from '../utils';
 import CrudDataModal from './CrudDataModal.vue';
 import RouteCard from './RouteCard.vue';
@@ -16,6 +16,8 @@ const props = defineProps<{
   mainPort: number;
   /** WS 路由 id → 活跃连接数（App 层轮询 /ws/connections 快照派生） */
   wsConnections: Record<string, number>;
+  /** 全局回调模板列表：接口卡片的回调 chip 显示模板名 */
+  templates: CallbackTemplateInfo[];
   notify: NotifyFn;
 }>();
 
@@ -342,6 +344,7 @@ async function saveProxy(svc: ServiceInfo) {
                 :index="i"
                 :port="mode === 'path' && !svc.isDefault ? mainPort : svc.port"
                 :base-path="mode === 'path' && !svc.isDefault ? svc.basePath : undefined"
+                :templates="templates"
                 :notify="notify"
                 @edit="emit('edit', $event)"
                 @remove="emit('remove-route', $event)"
@@ -358,6 +361,7 @@ async function saveProxy(svc: ServiceInfo) {
             :index="i"
             :port="mode === 'path' && !svc.isDefault ? mainPort : svc.port"
             :base-path="mode === 'path' && !svc.isDefault ? svc.basePath : undefined"
+            :templates="templates"
             :notify="notify"
             @edit="emit('edit', $event)"
             @remove="emit('remove-route', $event)"

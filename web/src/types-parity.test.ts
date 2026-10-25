@@ -44,7 +44,7 @@ const backendOf = extractMembers(BACKEND_TYPES, BACKEND_WS_GATEWAY);
 const frontendOf = extractMembers(FRONTEND_TYPES);
 
 /** 两侧镜像比对的目标类型（服务端分散在 types.ts 与 ws-gateway.ts，前端集中在 web/src/types.ts） */
-const SHARED_TYPES = ['Route', 'WsMessage', 'WsOnMessage', 'WsBehavior', 'WsConnectionSnapshot', 'RouteAuth', 'RequestLogEntry'];
+const SHARED_TYPES = ['Route', 'WsMessage', 'WsOnMessage', 'WsBehavior', 'WsConnectionSnapshot', 'RouteAuth', 'RequestLogEntry', 'CallbackTemplate'];
 
 /**
  * 白名单机制：两侧「有意」不同步的差异在此登记，防止护栏误报。
