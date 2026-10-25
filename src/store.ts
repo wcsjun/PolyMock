@@ -42,7 +42,16 @@ export function loadState(filePath: string): PersistedState {
     }
     return state;
   } catch (err) {
-    console.error(`[PolyMock] 配置文件解析失败（${filePath}），按空配置启动:`, err);
+    /* 损坏保护：先把原文件整体保留为 .corrupt-<时间戳> 副本再按空配置启动，
+       否则下一次注册表变更会用空状态原子覆盖原文件，原本可救的数据被静默清空 */
+    const backup = `${filePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    try {
+      fs.renameSync(filePath, backup);
+      console.error(`[PolyMock] 配置文件解析失败（${filePath}），按空配置启动；原文件已保留为 ${backup}:`, err);
+    } catch {
+      /* 副本保留失败（权限等）时降级为仅日志：不影响启动，原文件保持原位 */
+      console.error(`[PolyMock] 配置文件解析失败（${filePath}），按空配置启动；副本保留失败，原文件保持原位:`, err);
+    }
     return EMPTY;
   }
 }

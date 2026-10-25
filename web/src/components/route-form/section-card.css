@@ -1,0 +1,72 @@
+/* 五段卡片的共享骨架样式（原 RouteForm.vue scoped 样式拆分而来，各段经 <style scoped src> 引入） */
+.card {
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.card-note {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.card-chip {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.card-chip.off {
+  background: var(--bg-soft);
+  color: var(--text-faint);
+}
+
+/* 准入状态徽标：圆点 + 文字，折叠态也能快速分辨开关 */
+.card-chip.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.card-chip.state::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.card-head-ops {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}

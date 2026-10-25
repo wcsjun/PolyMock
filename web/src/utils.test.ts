@@ -23,6 +23,7 @@ import {
   serviceDisplaySuffix,
   splitRouteRequest,
   toJavaEntity,
+  truncateForPreview,
   wsSummary,
 } from './utils';
 import type { ConditionRow, Route } from './types';
@@ -531,5 +532,58 @@ describe('buildWsSnippet WS 连接代码', () => {
     expect(buildWsSnippet('ws://localhost:33233/ws/orders')).toBe(
       `const ws = new WebSocket('ws://localhost:33233/ws/orders');\nws.onmessage = (e) => console.log(JSON.parse(e.data));`,
     );
+  });
+});
+
+describe('truncateForPreview 预览截断', () => {
+  it('空串与短文本不截断：统计基于原始文本（空串 1 行，与 split 语义一致）', () => {
+    expect(truncateForPreview('')).toEqual({ text: '', totalChars: 0, totalLines: 1, truncated: false });
+    expect(truncateForPreview('a\nb', { maxChars: 10, maxLines: 5 })).toEqual({ text: 'a\nb', totalChars: 3, totalLines: 2, truncated: false });
+  });
+
+  it('恰好等于阈值不截断', () => {
+    const text = 'a'.repeat(160);
+    expect(truncateForPreview(text, { maxChars: 160 })).toEqual({ text, totalChars: 160, totalLines: 1, truncated: false });
+    const lines = Array.from({ length: 2000 }, (_, i) => `l${i}`).join('\n');
+    const multi = truncateForPreview(lines, { maxLines: 2000 });
+    expect(multi.truncated).toBe(false);
+    expect(multi.totalLines).toBe(2000);
+  });
+
+  it('超长单行按 maxChars 截断并追加 …', () => {
+    const text = 'x'.repeat(1000);
+    const result = truncateForPreview(text, { maxChars: 160 });
+    expect(result.text).toBe(`${'x'.repeat(160)}…`);
+    expect(result.text.length).toBe(161);
+    expect(result.totalChars).toBe(1000);
+    expect(result.totalLines).toBe(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('超多行按 maxLines 在行尾截断，统计保持原始行数与字符数', () => {
+    const lines = Array.from({ length: 3000 }, (_, i) => `line-${i}`);
+    const text = lines.join('\n');
+    const result = truncateForPreview(text, { maxLines: 2000 });
+    expect(result.text).toBe(`${lines.slice(0, 2000).join('\n')}…`);
+    expect(result.totalLines).toBe(3000);
+    expect(result.totalChars).toBe(text.length);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('maxChars 与 maxLines 同时超限取更小切点（先到为准）', () => {
+    const text = Array.from({ length: 100 }, () => 'x'.repeat(50)).join('\n');
+    const result = truncateForPreview(text, { maxChars: 200, maxLines: 50 });
+    expect(result.text).toBe(`${text.slice(0, 200)}…`);
+    expect(result.totalLines).toBe(100);
+  });
+
+  it('maxLines 先到时切在行边界（末行不带悬挂空行）', () => {
+    expect(truncateForPreview('aaa\nbbb\nccc', { maxChars: 100, maxLines: 2 }).text).toBe('aaa\nbbb…');
+  });
+
+  it('含中文按字符截断（UTF-16 码元）', () => {
+    const result = truncateForPreview('中'.repeat(200), { maxChars: 160 });
+    expect(result.text).toBe(`${'中'.repeat(160)}…`);
+    expect(result.totalChars).toBe(200);
   });
 });

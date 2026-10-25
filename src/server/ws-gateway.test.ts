@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { createApp, resolveUpgradeService } from './app.js';
+import { createApp } from './app.js';
+import { resolveUpgradeService } from './dispatch.js';
 import { ServiceManager } from './manager.js';
 import { RequestLogStore } from './request-log.js';
 import { WsGateway, WS_CLOSE_ROUTE_CHANGED } from './ws-gateway.js';

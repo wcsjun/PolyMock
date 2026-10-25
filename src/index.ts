@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
-import { createApp, resolveUpgradeService } from './server/app.js';
+import { createApp } from './server/app.js';
+import { resolveUpgradeService } from './server/dispatch.js';
 import { ServiceManager } from './server/manager.js';
 import { RequestLogStore } from './server/request-log.js';
 import { WsGateway } from './server/ws-gateway.js';

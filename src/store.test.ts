@@ -67,6 +67,25 @@ describe('loadState', () => {
     }
   });
 
+  it('JSON 损坏时保留 .corrupt- 副本且内容为原始坏文件（防止空配置覆盖可救数据）', () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'bad.json');
+    const original = '{ "version": 2, "services": [ {oops';
+    fs.writeFileSync(file, original);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(loadState(file)).toEqual(EMPTY);
+      const backup = fs.readdirSync(dir).find((name) => name.startsWith('bad.json.corrupt-'));
+      expect(backup).toBeTruthy();
+      expect(fs.readFileSync(path.join(dir, backup as string), 'utf8')).toBe(original);
+      /* 原路径已让位给副本：下一次保存写入的是新文件，不会覆盖坏文件内容 */
+      expect(fs.existsSync(file)).toBe(false);
+      expect(String(errorSpy.mock.calls[0]?.[0])).toContain('.corrupt-');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('字段缺失时按空数组兜底', () => {
     const file = path.join(makeTmpDir(), 'config.json');
     fs.writeFileSync(file, JSON.stringify({ version: 1 }));

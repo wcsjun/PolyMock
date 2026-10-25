@@ -11,6 +11,8 @@ export type PolyMockMode = 'port' | 'path';
 export interface MockMeta {
   mode: PolyMockMode;
   mainPort: number;
+  /** 配置状态版本号：注册表 change 时自增的内存态计数（不持久化，重启归零）；与上次不同才需要全量重拉路由 */
+  stateVersion: number;
 }
 
 /** GET /__polymock/routes 返回的接口定义 */

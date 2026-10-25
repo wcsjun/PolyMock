@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed } from 'vue';
 import type { NotifyFn, Route } from '../types';
-import { buildWsSnippet, copyText, formatBody, routeCardStyle, wsSummary, wsUrl } from '../utils';
+import { buildWsSnippet, copyText, formatBody, routeCardStyle, truncateForPreview, wsSummary, wsUrl } from '../utils';
+import { useCopyMenu } from '../composables/useCopyMenu';
+
+/* 剧本步骤载荷的展示截断上限（B1 决策：只截卡片展示，编辑抽屉全量） */
+const STEP_PAYLOAD_CHARS = 160;
 
 const props = defineProps<{
   route: Route;
@@ -34,10 +38,14 @@ const interval = computed(() => props.route.ws?.interval);
 const stepCount = computed(() => onOpen.value.length + (interval.value ? 1 : 0));
 const intervalLabel = computed(() => (interval.value ? (interval.value.everyMs >= 1000 ? `每 ${Math.round(interval.value.everyMs / 1000)}s` : `每 ${interval.value.everyMs}ms`) : ''));
 
-/** 剧本步骤帧内容：字符串原样展示，其余缩进 JSON */
+/** 剧本步骤帧内容：字符串原样展示，其余缩进 JSON；压平后截断（大 payload 不进 DOM 文本节点与 :title） */
 function stepPayload(body: unknown): string {
-  return formatBody(body).replace(/\s+/g, ' ');
+  return truncateForPreview(formatBody(body).replace(/\s+/g, ' '), { maxChars: STEP_PAYLOAD_CHARS }).text;
 }
+
+/* 折叠详情的步骤行：每步 payload 只计算一次，文本节点与 :title 共用同一截断文本 */
+const openSteps = computed(() => onOpen.value.map((message) => ({ delayMs: message.delayMs ?? 0, payload: stepPayload(message.body) })));
+const intervalStep = computed(() => (interval.value ? { payload: stepPayload(interval.value.body) } : null));
 
 /* ---------- 复制菜单：ws 地址 / JS 连接代码 ---------- */
 
@@ -48,12 +56,8 @@ const COPY_SUCCESS: Record<CopyKind, string> = {
   snippet: '已复制连接代码',
 };
 
-const copyMenuOpen = ref(false);
-const copyWrap = ref<HTMLElement | null>(null);
-
-function toggleCopyMenu() {
-  copyMenuOpen.value = !copyMenuOpen.value;
-}
+/* 复制菜单开合行为共用 useCopyMenu（与 RouteCard 同一份逻辑） */
+const { open: copyMenuOpen, wrapRef: copyWrap, toggle: toggleCopyMenu } = useCopyMenu();
 
 function fullWsUrl(): string {
   const prefix = props.basePath ? `/${props.basePath}` : '';
@@ -66,26 +70,6 @@ async function copySnippet(kind: CopyKind) {
   const ok = await copyText(kind === 'url' ? url : buildWsSnippet(url));
   props.notify(ok ? COPY_SUCCESS[kind] : '复制失败，请手动复制', ok ? 'ok' : 'err');
 }
-
-function onDocPointerDown(event: MouseEvent) {
-  if (copyMenuOpen.value && !copyWrap.value?.contains(event.target as Node)) {
-    copyMenuOpen.value = false;
-  }
-}
-
-function onDocKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') copyMenuOpen.value = false;
-}
-
-onMounted(() => {
-  document.addEventListener('pointerdown', onDocPointerDown);
-  document.addEventListener('keydown', onDocKeydown);
-});
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', onDocPointerDown);
-  document.removeEventListener('keydown', onDocKeydown);
-});
 </script>
 
 <template>
@@ -168,15 +152,15 @@ onBeforeUnmount(() => {
     <details v-if="stepCount > 0" class="script-details">
       <summary>剧本详情（{{ stepCount }} 步）</summary>
       <div class="step-list">
-        <div v-for="(message, i) in onOpen" :key="`open-${i}`" class="step-item">
+        <div v-for="(step, i) in openSteps" :key="`open-${i}`" class="step-item">
           <span class="step-index">#{{ i + 1 }}</span>
-          <span class="step-when">+{{ message.delayMs ?? 0 }}ms</span>
-          <span class="step-payload" :title="stepPayload(message.body)">{{ stepPayload(message.body) }}</span>
+          <span class="step-when">+{{ step.delayMs }}ms</span>
+          <span class="step-payload" :title="step.payload">{{ step.payload }}</span>
         </div>
-        <div v-if="interval" class="step-item">
+        <div v-if="intervalStep" class="step-item">
           <span class="step-index">⏱</span>
           <span class="step-when">{{ intervalLabel }}</span>
-          <span class="step-payload" :title="stepPayload(interval.body)">{{ stepPayload(interval.body) }}</span>
+          <span class="step-payload" :title="intervalStep.payload">{{ intervalStep.payload }}</span>
         </div>
       </div>
       <div class="script-usage">连接地址  {{ fullWsUrl() }}<template v-if="route.auth">
