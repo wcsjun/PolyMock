@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isJsonContentType, parseResponseBody, parseRouteRequest, parseWsBehavior } from './route-validation.js';
+import { isJsonContentType, parseCallbackTemplateInput, parseResponseBody, parseRouteCallback, parseRouteRequest, parseWsBehavior } from './route-validation.js';
 
 /* 校验层原先只能经 admin API 集成测试间接覆盖；拆分后可直接单测（parseWsBehavior 边界 + parseResponseBody 模板容忍优先） */
 
@@ -91,5 +91,58 @@ describe('parseRouteRequest / isJsonContentType（搬移后共用符号抽测）
     expect(isJsonContentType('application/json; charset=utf-8')).toBe(true);
     expect(isJsonContentType('application/vnd.api+json')).toBe(true);
     expect(isJsonContentType('text/html')).toBe(false);
+  });
+});
+
+describe('parseRouteCallback（双模式）', () => {
+  it('未配置 / null 归一为 undefined', () => {
+    expect(parseRouteCallback(undefined, 'response.callback')).toEqual({ ok: true, value: undefined });
+    expect(parseRouteCallback(null, 'response.callback')).toEqual({ ok: true, value: undefined });
+  });
+
+  it('引用模式：template 必填 + 可选 bodyOverride；多余字段拒收', () => {
+    expect(parseRouteCallback({ template: ' tpl-1 ' }, 'cb')).toEqual({ ok: true, value: { template: 'tpl-1' } });
+    expect(parseRouteCallback({ template: 't', bodyOverride: '{"a":1}' }, 'cb')).toEqual({
+      ok: true,
+      value: { template: 't', bodyOverride: '{"a":1}' },
+    });
+    expect(parseRouteCallback({ template: '' }, 'cb')).toEqual({ ok: false, error: 'cb 的 template 需为非空字符串' });
+    expect(parseRouteCallback({ template: 't', url: 'http://x' }, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ template: 't', bodyOverride: 3 }, 'cb').ok).toBe(false);
+  });
+
+  it('内联模式：url 必填 http(s)，method 白名单（大小写归一）', () => {
+    const parsed = parseRouteCallback({ url: 'http://127.0.0.1:9/n', method: 'get', delayMs: 100 }, 'cb');
+    expect(parsed).toEqual({ ok: true, value: { url: 'http://127.0.0.1:9/n', method: 'GET', delayMs: 100 } });
+    expect(parseRouteCallback({}, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ url: 'ftp://x' }, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ url: 'http://x', method: 'OPTIONS' }, 'cb').ok).toBe(false);
+  });
+
+  it('内联模式：延迟 / 抖动范围与字段类型校验', () => {
+    expect(parseRouteCallback({ url: 'http://x', delayMs: 60001 }, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ url: 'http://x', jitterMs: -1 }, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ url: 'http://x', body: 123 }, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ url: 'http://x', contentType: '' }, 'cb').ok).toBe(false);
+    expect(parseRouteCallback({ url: 'http://x', headers: [{ key: 'A', value: 'b' }] }, 'cb').ok).toBe(true);
+  });
+});
+
+describe('parseCallbackTemplateInput', () => {
+  it('合法输入归一（name trim / method 大写 / 可选字段缺省不出现在结果中）', () => {
+    const parsed = parseCallbackTemplateInput({ name: ' 支付通知 ', url: 'http://127.0.0.1:9/n', method: 'post', delayMs: 2000 });
+    expect(parsed.ok).toBe(true);
+    expect(parsed).toEqual({
+      ok: true,
+      value: { name: '支付通知', url: 'http://127.0.0.1:9/n', method: 'POST', delayMs: 2000 },
+    });
+  });
+
+  it('name / url 必填，非法值拒收', () => {
+    expect(parseCallbackTemplateInput({ url: 'http://x' }).ok).toBe(false);
+    expect(parseCallbackTemplateInput({ name: 'x' }).ok).toBe(false);
+    expect(parseCallbackTemplateInput({ name: 'x', url: 'notaurl' }).ok).toBe(false);
+    expect(parseCallbackTemplateInput({ name: 'x', url: 'http://x', jitterMs: 30001 }).ok).toBe(false);
+    expect(parseCallbackTemplateInput('str').ok).toBe(false);
   });
 });

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **异步回调（接口回调模拟）**：HTTP 接口（默认响应 / 每个变体）命中并完成响应后，按配置延迟异步向目标 URL 发起一次 HTTP 回调（fire-and-forget）——纯本地跑通「受理 → 回调」的第三方异步协作全链路（支付回调 / 订单状态机 / AI 长任务通知）：
+  - 配置双模式：引用全局回调模板（信封由模板统一管理，仅可 `bodyOverride` 覆盖载荷；优先级：变体覆盖 > 路由继承 > 模板默认）或内联完整配置（`url` / `method` / `headers` / `contentType` / `body` / `delayMs` 0-60000 / `jitterMs` 0-30000）；模板上下文为**命中时快照**（与响应模板同一套占位符），不阻塞响应路径；序列 / CRUD / WS 路由拒收 callback（400）
+  - 回调模板 CRUD：`GET/POST /__polymock/callbacks`、`PUT/DELETE /__polymock/callbacks/:id`——`GET` 附引用位置（usage）与出站统计（stats，由请求日志环形缓冲聚合）；name 全局唯一（409）；被引用的模板删除 409 并列出引用位置；`PUT` 响应携带受影响分支数（affected，编辑预警用）；改一处全部生效
+  - 出站约束与安全：受 `POLYMOCK_PROXY_ALLOW` 白名单约束（缺省不校验）；固定 10s 超时、不跟随重定向、失败只记日志不重试；出站携带 `X-PolyMock-Callback-Depth` 防自环（回调指向 PolyMock 自身时，入站深度 ≥ 5 跳过发送并记日志）；进程退出时未到期回调自然丢弃（不持久化）
+  - 出站日志：请求日志新增出站条目（`direction: "out"`，含渲染后载荷 / 对端状态码 / 失败原因 / 发出延迟 / 源请求关联），与入站共享环形缓冲与 SSE 实时推送；OpenAPI 契约与双语 README 同步
+
 ## [0.3.0] - 2026-10-25
 
 ### Added

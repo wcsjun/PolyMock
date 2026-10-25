@@ -3,7 +3,7 @@
   "info": {
     "title": "PolyMock 管理 API 与 Mock 分发契约",
     "version": "1.0.0",
-    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足（请求准入失败按路由的 `gateStatus` 返回，缺省 400，可为 404 / 422）；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → 请求准入 requireMatch（失败按 gateStatus，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）\n\n## WebSocket 接口\n`POST /__polymock/routes` 传 `protocol: \"ws\"` 注册 WS 接口（method 自动为 WS，行为配置在 ws 子对象）：命中且启用 → 101；未注册/已停用 → 404 关闭；认证失败 → 401 关闭，均不进入 HTTP 分发与代理。编辑/停用/删除后存量连接以 close 1012 关闭。日志只写连接级（method = WS），帧级不持久化。",
+    "description": "PolyMock 本地接口模拟服务的完整接口契约。\n\n## 响应约定\n- 成功返回 `{ ok: true, ... }`，失败返回 `{ ok: false, error: \"原因\" }`\n- 状态码语义：`400` 参数错误或请求条件不满足（请求准入失败按路由的 `gateStatus` 返回，缺省 400，可为 404 / 422）；`401` 缺少管理令牌；`404` 服务/接口不存在（Mock 分发未注册同理）；`409` 冲突（端口/服务名/接口形状/basePath）\n- 设置环境变量 `POLYMOCK_ADMIN_TOKEN` 后，所有 `/__polymock` 接口需携带 `x-polymock-token` 请求头（SSE 可用 `?token=` 查询参数），否则 401\n\n## Mock 分发解析优先级\n路由级认证(401) → 请求准入 requireMatch（失败按 gateStatus，缺省 400）→ 序列响应 → 全局场景集 → 条件变体（响应分支）→ 默认响应。\n未命中且服务配置了 `proxyTarget` 时转发上游（白名单外/上游失败返回 502），否则 404。\n\n## 运行模式\n`port`（缺省）：非默认服务在各自端口独立监听；`path`（POLYMOCK_MODE=path，Docker 默认）：所有服务经主端口 `/{basePath}` 前缀分发。\n\n## 将本契约导入 PolyMock 自身（演示导入功能）的注意项\n- `/__polymock/**` 条目会生成与管理 API 同名的 Mock 接口：真实管理 API 优先匹配，这些 mock 永远不会命中，属冗余数据，导入验证后建议删除\n- `/api/hello` 与播种接口重复，导入报告提示冲突属预期\n- 本契约不含任何 `/api/**` 通配占位路径（曾含的 `/api/{mockPath}` 已移除：它会与所有 `/api/**` 测试路由形状冲突，破坏 Mock 分发与测试）\n\n## WebSocket 接口\n`POST /__polymock/routes` 传 `protocol: \"ws\"` 注册 WS 接口（method 自动为 WS，行为配置在 ws 子对象）：命中且启用 → 101；未注册/已停用 → 404 关闭；认证失败 → 401 关闭，均不进入 HTTP 分发与代理。编辑/停用/删除后存量连接以 close 1012 关闭。日志只写连接级（method = WS），帧级不持久化。\n\n## 异步回调\n命中 HTTP 接口（默认响应 / 变体）并完成响应后，可按配置延迟异步向目标 URL 发起一次 HTTP 回调（fire-and-forget，10s 超时、不跟随重定向、失败只记日志不重试）。回调配置双模式：引用全局回调模板（`/__polymock/callbacks`，信封共享、载荷可用 bodyOverride 覆盖）或内联完整配置。模板上下文为触发命中的原始请求（命中时快照），与响应模板同一套占位符。出站受 `POLYMOCK_PROXY_ALLOW` 白名单约束，携带 `X-PolyMock-Callback-Depth` 防自环（入站深度 ≥5 跳过发送）。出站写入请求日志（`direction: \"out\"`），序列 / CRUD / WS 路由不支持回调。",
     "contact": {
       "name": "PolyMock"
     }
@@ -1218,6 +1218,220 @@
           }
         }
       }
+    },
+    "__polymock/callbacks": {
+      "get": {
+        "summary": "列出回调模板（含引用位置与出站统计）",
+        "description": "usage 为引用该模板的分支列表（默认响应 branch=null，变体为变体名）；stats 由请求日志环形缓冲（500 条）聚合，不额外持久化",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "callbacks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CallbackTemplate"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建回调模板",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallbackTemplate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "template": {
+                      "$ref": "#/components/schemas/CallbackTemplate"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "模板名称已存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "__polymock/callbacks/{id}": {
+      "put": {
+        "summary": "更新回调模板（改一处，引用接口的后续命中生效）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallbackTemplate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK，affected = 受影响分支数（编辑预警用）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "template": {
+                      "$ref": "#/components/schemas/CallbackTemplate"
+                    },
+                    "affected": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "模板名称与其他模板冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除回调模板（被引用时 409）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "被一个或多个分支引用，附 usage 引用位置列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "usage": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "routeId": {
+                            "type": "string"
+                          },
+                          "serviceId": {
+                            "type": "string"
+                          },
+                          "method": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "branch": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1471,6 +1685,10 @@
           },
           "body": {
             "description": "响应体；JSON 模式（未声明或 JSON 类 Content-Type）支持模板占位符；文本模式（非 JSON Content-Type）为原样文本字符串，同样支持模板"
+          },
+          "callback": {
+            "$ref": "#/components/schemas/RouteCallback",
+            "description": "命中本响应后异步发出的回调；序列 / CRUD / WS 路由不支持"
           }
         }
       },
@@ -1869,6 +2087,17 @@
               }
             },
             "description": "WS 连接级信息（method = WS 的日志条目携带）；帧级不持久化"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ],
+            "description": "日志方向：缺省 'in'；出站回调条目为 'out'"
+          },
+          "callback": {
+            "$ref": "#/components/schemas/CallbackLogInfo"
           }
         }
       },
@@ -2022,6 +2251,181 @@
           "framesOut": {
             "type": "integer",
             "description": "发出的帧数"
+          }
+        }
+      },
+      "CallbackTemplate": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "模板 id（路由 callback.template 引用键）"
+          },
+          "name": {
+            "type": "string",
+            "description": "展示名，全局唯一（冲突 409）"
+          },
+          "url": {
+            "type": "string",
+            "description": "回调目标 URL，http(s)；支持模板占位符（上下文为触发命中的请求快照）"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "POST",
+              "GET",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ],
+            "description": "缺省 POST"
+          },
+          "headers": {
+            "type": "array",
+            "description": "自定义出站请求头（值支持模板；禁 host / content-length 等托管头）",
+            "items": {
+              "$ref": "#/components/schemas/ResponseHeader"
+            }
+          },
+          "contentType": {
+            "type": "string",
+            "description": "回调请求体 Content-Type，缺省 application/json；非 JSON 时 body 按原文发送"
+          },
+          "body": {
+            "type": "string",
+            "description": "默认载荷（模板渲染）；引用方可通过 bodyOverride 整体覆盖"
+          },
+          "delayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000,
+            "description": "延迟毫秒，缺省 1000"
+          },
+          "jitterMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "随机抖动上限毫秒，实际延迟 = delayMs + rand(0..jitterMs)"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RouteCallback": {
+        "description": "异步回调配置，双模式二选一：引用模式（template [+ bodyOverride]，信封由全局回调模板统一管理）或内联模式（url 等完整配置）",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "template"
+            ],
+            "properties": {
+              "template": {
+                "type": "string",
+                "description": "回调模板 id；必须已存在（否则 400）"
+              },
+              "bodyOverride": {
+                "type": "string",
+                "description": "载荷覆盖（模板渲染），整体替换模板默认载荷；缺省用模板默认"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "回调目标 URL，http(s)，支持模板占位符"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "POST",
+                  "GET",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ],
+                "description": "缺省 POST"
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ResponseHeader"
+                }
+              },
+              "contentType": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string",
+                "description": "请求体（模板渲染）"
+              },
+              "delayMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 60000
+              },
+              "jitterMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 30000
+              }
+            }
+          }
+        ]
+      },
+      "CallbackLogInfo": {
+        "type": "object",
+        "required": [
+          "sourceLogId",
+          "routeId",
+          "delayMs",
+          "firedAfterMs",
+          "target"
+        ],
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "description": "引用的回调模板 id（内联模式不携带）"
+          },
+          "templateName": {
+            "type": "string"
+          },
+          "sourceLogId": {
+            "type": "string",
+            "nullable": true,
+            "description": "触发命中的源请求日志 id"
+          },
+          "routeId": {
+            "type": "string"
+          },
+          "delayMs": {
+            "type": "integer",
+            "description": "排程延迟（含抖动后实际值）"
+          },
+          "firedAfterMs": {
+            "type": "integer",
+            "description": "从命中到实际发出的间隔；未发出时为 0"
+          },
+          "target": {
+            "type": "string",
+            "description": "渲染后的完整目标 URL"
+          },
+          "requestBody": {
+            "type": "string",
+            "description": "渲染后请求体（截断至 2000 字符）"
           }
         }
       }

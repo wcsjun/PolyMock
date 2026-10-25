@@ -168,6 +168,14 @@ Differences in path mode:
 
 Response resolution order: route-level auth (401) → request admission (`requireMatch`, failures answered with `gateStatus`, default 400) → sequence response → global scene set → conditional variants (response branches) → default response.
 
+### Async callbacks (callback simulation)
+
+- **Closed-loop callbacks**: after an HTTP route (default response / each variant) is hit and the response is sent, PolyMock fires one asynchronous HTTP callback to a configured target URL after the configured delay — the full "I call it, it calls me back" third-party async flow (payment notifications / order state machines / AI job completion) runs purely locally; `127.0.0.1` local handlers are the primary target
+- **Snapshot template context**: the callback URL, headers, and payload are rendered from the **original request that triggered the hit** (snapshotted at hit time, same placeholders as response templates) — `{{body.orderNo}}` feeds the order number into the callback payload; callbacks never block the response path (fire-and-forget), and a hung target does not affect Mock latency
+- **Callback templates (reusable across services)**: global templates own the envelope — URL / method / headers / delay / jitter / default payload; many routes reference one template, and editing it takes effect everywhere (the update response carries the affected branch count); each branch may override the payload via `bodyOverride` (precedence: variant override > route inheritance > template default). Admin endpoints `/__polymock/callbacks` CRUD: `GET` includes usages and outbound stats, deleting a referenced template fails with 409 listing the referencing branches
+- **Outbound safety and loop protection**: outbound calls honor the `POLYMOCK_PROXY_ALLOW` allowlist (unset = no check; violations are logged); fixed 10s timeout, redirects not followed, failures only logged without retry; outbound calls carry `X-PolyMock-Callback-Depth` (when a callback targets PolyMock itself, an inbound depth ≥ 5 skips sending)
+- **Outbound observability**: outbound callbacks are written to the request log (`direction: "out"`, with the rendered payload / peer status / failure reason / firing delay / source-request linkage) sharing the ring buffer and SSE stream; sequence / CRUD / WS routes do not support callbacks
+
 ### Stateful CRUD
 
 Routes with `crud` enabled respond with resource semantics (in-memory only, reset on restart):
@@ -194,7 +202,7 @@ On top of HTTP mocking, PolyMock offers **protocol-native** WS mocking over the 
 
 ### Debugging
 
-- **Request log**: a 500-entry ring buffer recording method/path/query/body preview/status/duration, annotated with the matched route and variant (or the proxy pass-through and failure reason)
+- **Request log**: a 500-entry ring buffer recording method/path/query/body preview/status/duration, annotated with the matched route and variant (or the proxy pass-through and failure reason); outbound callback entries (`direction: "out"`) record the rendered payload / peer status / failure reason / firing delay / source-request linkage
 - **Live updates**: new entries are pushed over SSE (`/__polymock/events`); when the connection is unavailable the panel automatically falls back to 2-second polling
 - **Filter and replay**: filter by status class (2xx/4xx/5xx), service, or path keyword; GET entries can be replayed with one click, and any entry can be copied as curl
 - **Save as route**: a proxied response body can be saved as a mock route in one click — capture once, mock forever; JSON upstreams are stored formatted, text upstreams keep their content type and verbatim body
@@ -248,6 +256,10 @@ All admin endpoints live under `/__polymock` on the main port and speak JSON. Su
 | GET | `/__polymock/crud` | Inspect stateful CRUD collection stores: `{ collections: [{ serviceId, collection, count, records }] }` (in-memory, reset on restart) |
 | DELETE | `/__polymock/crud` | Clear CRUD collection stores; optional `?serviceId=&collection=` filters (individually or combined), returns the number of cleared records as `cleared` |
 | GET | `/__polymock/ws/connections` | Snapshot of live WS connections (read-only): `{ connections: [{ id, serviceId, routeId, path, remoteAddress, connectedAt, framesIn, framesOut }] }` |
+| GET | `/__polymock/callbacks` | Callback templates (with usages and stats): `{ callbacks: [{ ...template, usage: [{ routeId, serviceId, method, path, branch }], stats: { ok, fail, lastFiredAt } }] }` (stats aggregated from the request-log ring buffer, not persisted separately) |
+| POST | `/__polymock/callbacks` | Create a callback template (globally unique `name`, 409 on conflict): `{ name, url, method?, headers?, contentType?, body?, delayMs?, jitterMs? }` |
+| PUT | `/__polymock/callbacks/:id` | Update a callback template; the response carries `affected` (referencing branch count, for edit warnings) |
+| DELETE | `/__polymock/callbacks/:id` | Delete a callback template; 409 with `usage` when still referenced |
 | GET | `/__polymock/events` | SSE stream of request logs (`event: log`, data is the entry JSON) |
 
 > When `POLYMOCK_ADMIN_TOKEN` is set, all of the above require the `x-polymock-token` header or a `?token=` query parameter, otherwise 401.
@@ -318,12 +330,13 @@ Key fields:
 | `routes[].method` / `path` | HTTP method and path (WS routes fix the method to `WS`); paths support `:param` segments |
 | `routes[].protocol` | Protocol: `http` (default) = HTTP mock; `ws` = WebSocket mock (behaviour in the `ws` field; HTTP fields like `response` are never stored) |
 | `routes[].ws` | WS behaviour: `onOpen[]` (ordered `{ delayMs?, body }` pushes), `loopOnOpen` (replay the sequence), `onMessage` (`{ mode: echo/fixed/sequence/none, replies? }` reply policy), `interval` (`{ everyMs, body }` interval push, 100–60000 ms) |
-| `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body`; the body is strictly validated in JSON mode and stored verbatim as text when the effective Content-Type is non-JSON |
+| `routes[].response` | Default response: `status` / `contentType?` / `headers?` (custom response headers) / `body`; the body is strictly validated in JSON mode and stored verbatim as text when the effective Content-Type is non-JSON; optional `callback` (async callback, see above) |
 | `routes[].request` / `requireMatch` / `gateStatus` | Request admission: expected request conditions, the admission switch, and the failure status (`gateStatus` defaults to `400`; `404` hides the route, `422` is also allowed). Condition rows accept a `match` operator (`exists` / `equals` / `nonEmpty` / `regex`; omitted keeps the historical semantics); the body can be matched as a whole via `bodyMatch` (`subset` default / `deepEqual` / `textEqual`) plus `bodyRaw` (the expected full JSON for `deepEqual`, the expected verbatim text for `textEqual`; ignored under `subset`) |
 | `routes[].variants[]` | Response variants ("response branches" in the console): `name` / `match?` (omitted = always matches; the condition shape is the same as `request`) / `response` |
 | `routes[].sequence[]` | Sequence responses: `{ status, body, headers? }` entries, returned cyclically |
 | `routes[].disabled` / `delayMs` / `jitterMs` / `failureRate` / `crud` / `renderRequest` | Behavior switches and simulation parameters (`renderRequest` = render request-body templates; **on by default**, disabled only by an explicit `false`) |
 | `settings.activeVariant` | Global scene set: when set, same-named variants are forced |
+| `callbacks[]` | Global callback templates (reusable across services): `{ id, name, url, method?, headers?, contentType?, body?, delayMs?, jitterMs?, createdAt }`; routes reference them from `response.callback` via `{ template: <id>, bodyOverride? }` (the envelope is owned by the template, only the payload can be overridden) or inline full config (`{ url, method?, headers?, contentType?, body?, delayMs?, jitterMs? }`); sequence / CRUD / WS routes do not support callbacks. Purely additive field, no migration needed |
 
 Older configuration files (missing `version` or `version: 1`) are migrated automatically on load — fields stay compatible, no manual action needed. Every field added for request admission (the `match` operator on condition rows, the route's `gateStatus`, and `bodyMatch` / `bodyRaw` on the request group) is optional, so existing configs need no migration and `version` stays `2`.
 

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { renderString, renderTemplate, renderTemplateText, type TemplateContext } from '../template.js';
 import type { RouteRegistry } from '../registry.js';
 import type { RequestLogStore } from './request-log.js';
+import { scheduleHttpCallback } from './callback-dispatcher.js';
 import { effectiveResponseContentType, isHostAllowed, isJsonContentType } from './route-validation.js';
 import { DEFAULT_SERVICE_ID, type PolyMockMode } from '../types.js';
 import type { RequestCondition, RouteRequest, RouteResponse, ResponseHeader, Route, RouteAuth } from '../types.js';
@@ -500,12 +501,13 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     let proxyBody: string | undefined;
     let proxyContentType: string | undefined;
 
-    /** 写入一条请求日志（未注入 logs 时忽略）；query / bodyPreview 仅在非空时记录 */
-    const writeLog = () => {
-      if (!deps?.logs) return;
+    /** 写入一条请求日志（未注入 logs 时不写并返回 null）；返回条目 id（出站回调用它关联源请求）。query / bodyPreview 仅在非空时记录 */
+    const writeLog = (): string | null => {
+      if (!deps?.logs) return null;
+      const entryId = randomUUID();
       const query = flattenQuery(req.query as Record<string, unknown>);
       deps.logs.push({
-        id: randomUUID(),
+        id: entryId,
         ts: start,
         serviceId,
         method: req.method,
@@ -521,6 +523,7 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
         ...(proxyBody !== undefined ? { proxyBody } : {}),
         ...(proxyContentType ? { proxyContentType } : {}),
       });
+      return entryId;
     };
 
     const found = registry.findWithParams(serviceId, req.method, req.path);
@@ -729,7 +732,21 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
       applyResponseHeaders(res, result.response.headers, templateCtx);
       status = result.response.status;
       res.status(status).send(text);
-      writeLog();
+      const sourceLogId = writeLog();
+      if (result.response.callback) {
+        scheduleHttpCallback({
+          registry,
+          logs: deps?.logs,
+          allowHosts: deps?.proxyAllowHosts,
+          serviceId,
+          routeId: route.id,
+          sourceLogId,
+          callback: result.response.callback,
+          ctx: templateCtx,
+          hitAt: start,
+          inboundDepth: Math.max(0, Number(req.get('x-polymock-callback-depth')) || 0),
+        });
+      }
       return;
     }
 
@@ -753,7 +770,21 @@ export function createDispatch(registry: RouteRegistry, serviceId: string, deps?
     applyResponseHeaders(res, result.response.headers, templateCtx);
     status = result.response.status;
     res.status(status).json(rendered);
-    writeLog();
+    const sourceLogId = writeLog();
+    if (result.response.callback) {
+      scheduleHttpCallback({
+        registry,
+        logs: deps?.logs,
+        allowHosts: deps?.proxyAllowHosts,
+        serviceId,
+        routeId: route.id,
+        sourceLogId,
+        callback: result.response.callback,
+        ctx: templateCtx,
+        hitAt: start,
+        inboundDepth: Math.max(0, Number(req.get('x-polymock-callback-depth')) || 0),
+      });
+    }
   };
 }
 /**

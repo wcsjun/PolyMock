@@ -10,8 +10,10 @@ import {
   isHostAllowed,
   isJsonContentType,
   parseBehaviorFields,
+  parseCallbackTemplateInput,
   parseResponseHeaders,
   parseRouteAuth,
+  parseRouteCallback,
   parseRouteRequest,
   parseResponseBody,
   parseSequence,
@@ -22,10 +24,12 @@ import {
 import {
   DEFAULT_SERVICE_ID,
   slugifyBasePath,
+  type CallbackTemplate,
   type RequestLogEntry,
   type ResponseVariant,
   type Route,
   type RouteAuth,
+  type RouteCallback,
   type RouteRequest,
   type Service,
   type PolyMockMode,
@@ -65,6 +69,33 @@ function describeService(registry: RouteRegistry, manager: ServiceManagerLike, s
     running: service.id === DEFAULT_SERVICE_ID ? true : manager.isRunning(service.id),
     count: registry.list(service.id).length,
   };
+}
+
+/**
+ * 回调与序列 / CRUD 的互斥检查：序列响应与 CRUD 各有自身的响应语义，混入回调只会留下永不生效的死配置。
+ * hasCallback = 默认响应或任一变体配置了 callback；返回错误信息或 null。
+ */
+function callbackModeConflict(routeLike: Pick<Route, 'sequence' | 'crud' | 'response' | 'variants'>): string | null {
+  const hasCallback = !!(routeLike.response?.callback ?? routeLike.variants?.some((v) => v.response.callback));
+  if (!hasCallback) return null;
+  if (routeLike.sequence && routeLike.sequence.length > 0) {
+    return '序列响应不支持回调（response.callback / 变体回调），请改用变体表达不同回调';
+  }
+  if (routeLike.crud) return 'CRUD 接口不支持回调';
+  return null;
+}
+
+/** 收集解析结果中全部引用模式的模板 id（默认响应 + 变体），供存在性校验 */
+function collectTemplateRefs(callbacks: Array<RouteCallback | undefined>): string[] {
+  return callbacks.filter((c): c is Extract<RouteCallback, { template: string }> => !!c && 'template' in c).map((c) => c.template);
+}
+
+/** 校验引用的回调模板全部存在；返回第一条错误信息或 null */
+function checkTemplateRefs(registry: RouteRegistry, refs: string[]): string | null {
+  for (const id of refs) {
+    if (!registry.getCallbackTemplate(id)) return `引用的回调模板 ${id} 不存在`;
+  }
+  return null;
 }
 
 export function createAdminRouter(registry: RouteRegistry, manager: ServiceManagerLike, options: AdminOptions): express.Router {
@@ -293,12 +324,77 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     res.on('close', cleanup);
   });
 
+  // ---- 回调模板管理（全局实体，跨服务复用）----
+
+  /** 出站统计窗口：与请求日志环形缓冲同池（500 条），据此聚合每模板成功 / 失败计数 */
+  const CALLBACK_STATS_WINDOW = 500;
+
+  router.get('/callbacks', (_req, res) => {
+    const recent = options.logs?.list({ limit: CALLBACK_STATS_WINDOW }) ?? [];
+    const callbacks = registry.listCallbackTemplates().map((template) => {
+      const fired = recent.filter((entry) => entry.direction === 'out' && entry.callback?.templateId === template.id);
+      const ok = fired.filter((entry) => entry.status >= 200 && entry.status < 400).length;
+      return {
+        ...template,
+        usage: registry.findCallbackUsages(template.id),
+        stats: { ok, fail: fired.length - ok, lastFiredAt: fired[0]?.ts ?? null },
+      };
+    });
+    res.json({ ok: true, callbacks });
+  });
+
+  router.post('/callbacks', (req, res) => {
+    const parsed = parseCallbackTemplateInput(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ ok: false, error: parsed.error });
+      return;
+    }
+    if (registry.getCallbackTemplateByName(parsed.value.name)) {
+      res.status(409).json({ ok: false, error: `回调模板「${parsed.value.name}」已存在` });
+      return;
+    }
+    const template = registry.addCallbackTemplate(parsed.value);
+    res.status(201).json({ ok: true, template });
+  });
+
+  router.put('/callbacks/:id', (req, res) => {
+    const current = registry.getCallbackTemplate(req.params.id);
+    if (!current) {
+      res.status(404).json({ ok: false, error: '回调模板不存在' });
+      return;
+    }
+    const parsed = parseCallbackTemplateInput(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ ok: false, error: parsed.error });
+      return;
+    }
+    const dup = registry.getCallbackTemplateByName(parsed.value.name);
+    if (dup && dup.id !== current.id) {
+      res.status(409).json({ ok: false, error: `回调模板「${parsed.value.name}」已存在` });
+      return;
+    }
+    const template = registry.updateCallbackTemplate(req.params.id, parsed.value) as CallbackTemplate;
+    /* 编辑预警：响应携带受影响分支数（改一处，所有引用接口的后续命中生效） */
+    res.json({ ok: true, template, affected: registry.findCallbackUsages(req.params.id).length });
+  });
+
+  router.delete('/callbacks/:id', (req, res) => {
+    const usage = registry.findCallbackUsages(req.params.id);
+    if (usage.length > 0) {
+      res.status(409).json({ ok: false, error: `回调模板被 ${usage.length} 个分支引用，无法删除`, usage });
+      return;
+    }
+    if (!registry.removeCallbackTemplate(req.params.id)) {
+      res.status(404).json({ ok: false, error: '回调模板不存在' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
   // ---- 全局设置（场景集）----
   router.get('/settings', (_req, res) => {
     res.json({ ok: true, settings: registry.getSettings() });
-  });
-
-  router.put('/settings', (req, res) => {
+  });  router.put('/settings', (req, res) => {
     const { activeVariant } = (req.body ?? {}) as { activeVariant?: unknown };
     if (typeof activeVariant !== 'string' && activeVariant !== null) {
       res.status(400).json({ ok: false, error: 'activeVariant 需为字符串或 null' });
@@ -350,7 +446,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   router.post('/routes', (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { serviceId, name, path: routePath, request, requireMatch, variants, sequence, auth } = body;
-    const response = body.response as { body?: unknown; status?: unknown; contentType?: unknown; headers?: unknown } | undefined;
+    const response = body.response as { body?: unknown; status?: unknown; contentType?: unknown; headers?: unknown; callback?: unknown } | undefined;
     const protocol = body.protocol;
     if (protocol !== undefined && protocol !== 'http' && protocol !== 'ws') {
       res.status(400).json({ ok: false, error: 'protocol 需为 http 或 ws' });
@@ -479,6 +575,11 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       res.status(400).json({ ok: false, error: headersParsed.error });
       return;
     }
+    const callbackParsed = parseRouteCallback(response?.callback, 'response.callback');
+    if (!callbackParsed.ok) {
+      res.status(400).json({ ok: false, error: callbackParsed.error });
+      return;
+    }
 
     let routeRequest: RouteRequest | undefined;
     if (request !== undefined) {
@@ -500,10 +601,28 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
       routeVariants = parsed.value;
     }
 
+    /* 回调引用的模板必须已存在（变体的 callback 已在 parseVariants 内解析）；序列 / CRUD 与回调互斥 */
+    const templateRefError = checkTemplateRefs(registry, collectTemplateRefs([callbackParsed.value, routeVariants?.map((v) => v.response.callback)].flat()));
+    if (templateRefError) {
+      res.status(400).json({ ok: false, error: templateRefError });
+      return;
+    }
+    const modeConflict = callbackModeConflict({
+      sequence: routeSequence,
+      crud: behaviorParsed.value.crud,
+      response: callbackParsed.value ? { status: 200, body: null, callback: callbackParsed.value } : undefined,
+      variants: routeVariants,
+    });
+    if (modeConflict) {
+      res.status(400).json({ ok: false, error: modeConflict });
+      return;
+    }
+
     const route = registry.add(sid, method, routePath, {
       status: typeof response?.status === 'number' ? response.status : 200,
       contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
       ...(headersParsed.value ? { headers: headersParsed.value } : {}),
+      ...(callbackParsed.value ? { callback: callbackParsed.value } : {}),
       body: bodyParsed.value,
     }, routeName, routeRequest, requireMatch, routeVariants, { ...behaviorParsed.value, sequence: routeSequence, auth: routeAuth });
     res.status(201).json({ ok: true, route });
@@ -527,7 +646,7 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
   router.put('/routes/:id', (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { serviceId, name, method, path: routePath, request, requireMatch, variants, sequence, auth } = body;
-    const response = body.response as { body?: unknown; status?: unknown; contentType?: unknown; headers?: unknown } | undefined;
+    const response = body.response as { body?: unknown; status?: unknown; contentType?: unknown; headers?: unknown; callback?: unknown } | undefined;
     const patch: Partial<Pick<Route, 'serviceId' | 'method' | 'path' | 'name' | 'response' | 'request' | 'requireMatch' | 'variants' | 'disabled' | 'delayMs' | 'jitterMs' | 'failureRate' | 'sequence' | 'crud' | 'auth' | 'ws'>> = {};
 
     /* 当前路由的协议决定分支校验：WS 路由拒收 HTTP 专属字段，HTTP 路由拒收 ws 字段 */
@@ -614,10 +733,17 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
         res.status(400).json({ ok: false, error: headersParsed.error });
         return;
       }
+      /* response 整体替换：callback 缺省（未提供）即清除原回调配置 */
+      const callbackParsed = parseRouteCallback(response?.callback, 'response.callback');
+      if (!callbackParsed.ok) {
+        res.status(400).json({ ok: false, error: callbackParsed.error });
+        return;
+      }
       patch.response = {
         status: typeof response?.status === 'number' ? response.status : 200,
         contentType: typeof response?.contentType === 'string' ? response.contentType : undefined,
         ...(headersParsed.value ? { headers: headersParsed.value } : {}),
+        ...(callbackParsed.value ? { callback: callbackParsed.value } : {}),
         body: bodyParsed.value,
       };
     }
@@ -672,6 +798,23 @@ export function createAdminRouter(registry: RouteRegistry, manager: ServiceManag
     if (Object.keys(patch).length === 0) {
       res.status(400).json({ ok: false, error: '没有可更新的字段（serviceId / name / method / path / response / request / requireMatch / gateStatus / variants / disabled / delayMs / jitterMs / failureRate / sequence / crud / auth / ws）' });
       return;
+    }
+
+    /* 回调校验（基于 patch 提供的新内容 + 当前路由合并后的有效形态）：
+       引用模板必须存在；序列 / CRUD 与回调互斥 */
+    if (current) {
+      const newRefs = collectTemplateRefs([patch.response?.callback, ...(patch.variants ?? []).map((v) => v.response.callback)]);
+      const templateRefError = checkTemplateRefs(registry, newRefs);
+      if (templateRefError) {
+        res.status(400).json({ ok: false, error: templateRefError });
+        return;
+      }
+      const effective: Route = { ...current, ...patch };
+      const modeConflict = callbackModeConflict(effective);
+      if (modeConflict) {
+        res.status(400).json({ ok: false, error: modeConflict });
+        return;
+      }
     }
 
     const result = registry.update(req.params.id, patch);
